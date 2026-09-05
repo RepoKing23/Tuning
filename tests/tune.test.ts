@@ -113,8 +113,15 @@ describe('timing recommender', () => {
         const [r, c] = key.split(',').map(Number);
         const current = spark.values[r][c];
         expect(s.value).toBe(current + s.delta);
-        if (s.delta > 0) expect(s.delta).toBeLessThanOrEqual(profile.maxAdvance);
-        else expect(-s.delta).toBeLessThanOrEqual(profile.maxRetard);
+        if (s.delta > 0) {
+          expect(s.delta).toBeLessThanOrEqual(profile.maxAdvance);
+        } else if (profile.overrun && s.knock === 0) {
+          // Overrun profiles set an absolute target, so the delta is however
+          // far the stock value sits from it. The landing point is what matters.
+          expect(s.value).toBe(Math.round(profile.overrunTargetDeg! * profile.aggression));
+        } else {
+          expect(-s.delta).toBeLessThanOrEqual(profile.maxKnockRetard);
+        }
         // The ROM's own scaling limits are absolute.
         expect(s.value).toBeGreaterThanOrEqual(spark.scaling.min);
         expect(s.value).toBeLessThanOrEqual(spark.scaling.max);
@@ -238,5 +245,77 @@ describe('MAF part voltage ranges', () => {
     if (rec3.status === 'ok') {
       expect(rec3.suggestions.size).toBeLessThan(rec2.suggestions.size);
     }
+  });
+});
+
+describe('overrun profiles', () => {
+  // Regression: the first implementation subtracted a bounded retard from the
+  // stock map. Stock holds 28-45 degrees in the overrun region, so a 12 or 20
+  // degree subtraction landed at +22 and +12 respectively — never crossing TDC,
+  // and therefore producing no exhaust burble at all. Overrun profiles must set
+  // an absolute target on the far side of TDC.
+  it('drive overrun cells past TDC into negative timing', () => {
+    for (const id of ['popsAndBangs', 'flames'] as ProfileId[]) {
+      const profile = PROFILES[id];
+      const rec = recommendTiming(inputs, spark, {
+        profile: id, minSamples: 12, intensity: 1, timeRange: null,
+      });
+      expect(rec.status).toBe('ok');
+
+      const overrunCells = [...rec.suggestions.values()].filter((s) => s.knock === 0);
+      expect(overrunCells.length).toBeGreaterThan(10);
+
+      const negative = overrunCells.filter((s) => s.value < 0);
+      expect(negative.length).toBeGreaterThan(10);
+
+      // Every overrun cell lands exactly on the profile's absolute target.
+      const target = Math.round(profile.overrunTargetDeg! * profile.aggression);
+      for (const s of overrunCells) expect(s.value).toBe(target);
+      expect(target).toBeLessThan(0);
+    }
+  });
+
+  it('retard harder for flames than for pops and bangs', () => {
+    const pops = recommendTiming(inputs, spark, {
+      profile: 'popsAndBangs', minSamples: 12, intensity: 1, timeRange: null,
+    });
+    const flames = recommendTiming(inputs, spark, {
+      profile: 'flames', minSamples: 12, intensity: 1, timeRange: null,
+    });
+    const lowest = (r: typeof pops) => Math.min(...[...r.suggestions.values()].map((s) => s.value));
+    expect(lowest(flames)).toBeLessThan(lowest(pops));
+  });
+
+  it('stay clear of idle and keep to the low-load columns', () => {
+    const rec = recommendTiming(inputs, spark, {
+      profile: 'flames', minSamples: 12, intensity: 1, timeRange: null,
+    });
+    for (const [key, s] of rec.suggestions) {
+      if (s.knock > 0) continue;
+      const [r, c] = key.split(',').map(Number);
+      // Retarding idle past TDC stalls the engine; retarding cruise wrecks
+      // driveability and cooks the exhaust for no noise.
+      expect(spark.y.values[r]).toBeGreaterThanOrEqual(1500);
+      expect(spark.x.values[c]).toBeLessThanOrEqual(30);
+    }
+  });
+
+  it('never exceed what the ROM scaling can store', () => {
+    const rec = recommendTiming(inputs, spark, {
+      profile: 'flames', minSamples: 12, intensity: 1.5, timeRange: null,
+    });
+    for (const s of rec.suggestions.values()) {
+      expect(s.value).toBeGreaterThanOrEqual(spark.scaling.min);
+      expect(s.value).toBeLessThanOrEqual(spark.scaling.max);
+    }
+  });
+
+  it('say plainly when a cell has no logged deceleration behind it', () => {
+    const rec = recommendTiming(inputs, spark, {
+      profile: 'popsAndBangs', minSamples: 12, intensity: 1, timeRange: null,
+    });
+    const reasons = [...rec.suggestions.values()].map((s) => s.reason).join(' ');
+    expect(reasons).toMatch(/no closed-throttle deceleration in this cell/);
+    expect(rec.notes.join(' ')).toMatch(/after TDC/);
   });
 });

@@ -69,8 +69,8 @@ profiles:
 |---|---|
 | Economy | Adds timing in the light-load cruise region only. |
 | Power | Works mid- and high-load cells toward best torque. |
-| Pops & bangs | Retards ignition on closed-throttle overrun. |
-| Flames | The same mechanism, further. |
+| Pops & bangs | Drives the closed-throttle overrun cells to about 10° after TDC. |
+| Flames | The same mechanism at about 20° after TDC, across a wider rpm band. |
 
 Two rules are enforced in code, in every profile:
 
@@ -81,6 +81,16 @@ Two rules are enforced in code, in every profile:
 
 Cells with too little data are left alone and reported, rather than being given a
 confident-looking average of four samples.
+
+The two overrun profiles are the exception to that rule, deliberately. Adding
+advance is a correction and needs evidence; retarding the overrun region is a
+configuration choice, and which cells the engine passes through on a closed
+throttle is known from the map's own axes rather than discovered from a log.
+Gating it on coverage would silently do nothing on most logs, since lifting off
+is a small fraction of any drive. They set an absolute target past TDC rather
+than subtracting a fixed amount — the stock map holds 28-45° here, and no
+bounded subtraction from that reaches the far side of TDC, which is the only
+place unburnt fuel survives into the exhaust.
 
 Every suggested cell carries its sample count, knock count, confidence and the
 reason for the change — hover it in the grid.

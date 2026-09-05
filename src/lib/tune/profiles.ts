@@ -17,8 +17,19 @@ export interface Profile {
   warning?: string;
   /** Largest advance this profile will ever add to one cell, in degrees. */
   maxAdvance: number;
-  /** Largest retard this profile will ever apply to one cell, in degrees. */
-  maxRetard: number;
+  /** Largest retard a knock event may pull from one cell, in degrees. */
+  maxKnockRetard: number;
+  /**
+   * Absolute timing the overrun cells are driven to, in degrees. Negative means
+   * after TDC.
+   *
+   * Overrun profiles must set an absolute target rather than subtract a fixed
+   * amount, because the stock map holds 28-45 degrees of advance in this region
+   * and no bounded subtraction from that reaches the wrong side of TDC. Burning
+   * fuel in the exhaust requires the charge to still be alight when the exhaust
+   * valve opens, which does not happen at any positive advance.
+   */
+  overrunTargetDeg?: number;
   /** Scales every suggested step. 1.0 is the profile's full nominal step. */
   aggression: number;
   /** Cells the profile wants to change. */
@@ -35,7 +46,7 @@ export const PROFILES: Record<ProfileId, Profile> = {
       'Adds timing in the light-load cruise region only, where extra advance improves ' +
       'efficiency, and leaves everything above half load exactly as it is.',
     maxAdvance: 3,
-    maxRetard: 4,
+    maxKnockRetard: 4,
     aggression: 0.7,
     region: (rpm, load) => load <= 50 && rpm >= 1250 && rpm <= 3500,
     overrun: false,
@@ -47,7 +58,7 @@ export const PROFILES: Record<ProfileId, Profile> = {
       'Works the mid- and high-load cells toward best torque, backing off immediately ' +
       'wherever the logs recorded knock.',
     maxAdvance: 2,
-    maxRetard: 6,
+    maxKnockRetard: 6,
     aggression: 0.6,
     region: (rpm, load) => load >= 50 && rpm >= 2000,
     overrun: false,
@@ -56,33 +67,36 @@ export const PROFILES: Record<ProfileId, Profile> = {
     id: 'popsAndBangs',
     label: 'Pops & bangs',
     description:
-      'Retards ignition on closed-throttle overrun so combustion finishes in the exhaust. ' +
-      'Needs the decel fuel-cut tables softened too — see the notes below.',
+      'Drives the closed-throttle overrun cells to about 10 degrees after TDC, so the charge ' +
+      'is still burning when the exhaust valve opens. Needs the decel fuel-cut tables ' +
+      'softened too — see the notes below.',
     warning:
       'This burns fuel in the exhaust on every lift. It destroys catalytic converters and, ' +
       'run hard or for long, damages exhaust valves and turbine housings. Expect to fail an ' +
       'emissions test.',
     maxAdvance: 0,
-    maxRetard: 12,
-    aggression: 0.5,
-    region: (rpm, load) => load <= 30 && rpm >= 1500 && rpm <= 4500,
+    maxKnockRetard: 12,
+    overrunTargetDeg: -10,
+    aggression: 1,
+    region: (rpm, load) => load <= 20 && rpm >= 1500 && rpm <= 4500,
     overrun: true,
   },
   flames: {
     id: 'flames',
     label: 'Flames',
     description:
-      'The same overrun mechanism as pops & bangs, taken further: more retard across a ' +
-      'wider rpm band, with the fuel cut delayed longer.',
+      'The same overrun mechanism as pops & bangs, taken further: about 20 degrees after TDC ' +
+      'across a wider rpm band, with the fuel cut delayed longer.',
     warning:
       'Substantially more damaging than pops & bangs. Unburnt fuel igniting in the exhaust ' +
       'will destroy a catalytic converter quickly and can crack a manifold, burn exhaust ' +
       'valves, and melt a turbine housing. Use only on a decatted car you are prepared to ' +
       'rebuild, and never for extended periods.',
     maxAdvance: 0,
-    maxRetard: 20,
-    aggression: 0.8,
-    region: (rpm, load) => load <= 35 && rpm >= 1500,
+    maxKnockRetard: 20,
+    overrunTargetDeg: -20,
+    aggression: 1,
+    region: (rpm, load) => load <= 30 && rpm >= 1500,
     overrun: true,
   },
 };

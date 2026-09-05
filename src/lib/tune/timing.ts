@@ -38,7 +38,12 @@ function mergeCells(a: CellStats, b: CellStats): CellStats {
   for (const [name, arr] of b.values) {
     values.set(name, [...(values.get(name) ?? []), ...arr]);
   }
-  return { n: a.n + b.n, knock: a.knock + b.knock, values };
+  return {
+    n: a.n + b.n,
+    knock: a.knock + b.knock,
+    overrun: a.overrun + b.overrun,
+    values,
+  };
 }
 
 /**
@@ -126,6 +131,7 @@ export function recommendTiming(
   let skipped = 0;
   let knockCells = 0;
   let ceilingHits = 0;
+  let confirmedOverrun = 0;
 
   for (let r = 0; r < rpmAxis.length; r++) {
     for (let c = 0; c < loadAxis.length; c++) {
@@ -134,20 +140,16 @@ export function recommendTiming(
       const load = loadAxis[c];
       const current = table.values[r][c];
 
-      if (cell.n === 0) continue;
-      if (cell.n < options.minSamples) { starved++; continue; }
-
       const confidence = Math.min(1, cell.n / SATURATION_SAMPLES);
-      const logged = cell.values.get('TimingAdv') ?? [];
-      const spread = iqr(logged);
+      const spread = iqr(cell.values.get('TimingAdv') ?? []);
 
       let delta = 0;
       let reason = '';
 
-      if (cell.knock > 0) {
-        // Safety first, in every profile, inside the target region or not.
+      // Knock evidence outranks everything, in every profile.
+      if (cell.knock > 0 && cell.n >= options.minSamples) {
         knockCells++;
-        const degrees = Math.min(profile.maxRetard, Math.ceil(cell.knock / KNOCK_PER_DEGREE));
+        const degrees = Math.min(profile.maxKnockRetard, Math.ceil(cell.knock / KNOCK_PER_DEGREE));
         delta = -degrees;
         reason =
           `${cell.knock} knock count(s) recorded here across ${cell.n} samples — ` +
@@ -156,18 +158,35 @@ export function recommendTiming(
         skipped++;
         continue;
       } else if (profile.overrun) {
-        // Retard into the exhaust stroke to burn fuel there rather than in the
-        // cylinder. Scaled by how far into the band this cell sits.
-        const step = Math.round(profile.maxRetard * profile.aggression * options.intensity);
-        if (step <= 0) { skipped++; continue; }
-        delta = -step;
+        // Deliberately not gated on sample count.
+        //
+        // Adding advance is a correction and needs evidence. Retarding the
+        // overrun region is a configuration choice: which cells the engine
+        // passes through on a closed throttle is known from the map's own axes,
+        // not discovered from a log. Requiring coverage here would silently do
+        // nothing on any log that happens to contain little decel — which is
+        // most logs, since lifting off is a small fraction of any drive.
+        const target = (profile.overrunTargetDeg ?? 0) * profile.aggression * options.intensity;
+        if (target >= current) { skipped++; continue; }
+        delta = Math.round(target) - current;
+
+        const confirmed = cell.overrun > 0;
+        if (confirmed) confirmedOverrun++;
         reason =
-          `overrun cell: retarding ${step}° so combustion finishes in the exhaust ` +
-          `(${cell.n} samples, no knock recorded)`;
+          `overrun cell: ${current}° to ${Math.round(target)}° (after TDC) so the charge is ` +
+          'still burning when the exhaust valve opens. ' +
+          (confirmed
+            ? `${cell.overrun} of ${cell.n} samples here were closed-throttle deceleration.`
+            : 'Your logs contain no closed-throttle deceleration in this cell, so this comes ' +
+              'from the map region rather than from measurement.');
       } else if (profile.maxAdvance <= 0) {
         skipped++;
         continue;
       } else {
+        // The advance path is a correction, so it does need evidence.
+        if (cell.n === 0) continue;
+        if (cell.n < options.minSamples) { starved++; continue; }
+
         const step = profile.maxAdvance * profile.aggression * options.intensity * confidence;
         const rounded = Math.round(step);
         if (rounded <= 0) { skipped++; continue; }
@@ -198,7 +217,11 @@ export function recommendTiming(
         value,
         delta: value - current,
         // A knock-driven retard is acted on regardless of sample count.
-        confidence: cell.knock > 0 ? Math.max(confidence, 0.8) : confidence,
+        confidence: cell.knock > 0
+          ? Math.max(confidence, 0.8)
+          : profile.overrun
+            ? (cell.overrun > 0 ? 1 : 0.6)
+            : confidence,
         samples: cell.n,
         knock: cell.knock,
         reason,
@@ -225,6 +248,19 @@ export function recommendTiming(
     );
   }
   if (profile.overrun) {
+    notes.push(
+      `Overrun cells are driven to an absolute ${Math.round(
+        (profile.overrunTargetDeg ?? 0) * profile.aggression * options.intensity,
+      )}° (after TDC). Positive advance burns the charge in the cylinder and makes no ` +
+        'noise at all, so a relative retard from the stock 28-45° would do nothing.',
+    );
+    notes.push(
+      `Your logs confirm closed-throttle deceleration in ${confirmedOverrun} of the changed ` +
+        'cells. The rest are set from the map region, since lifting off is a small part of any ' +
+        'drive and waiting for log coverage of every overrun cell would mean never building ' +
+        'this tune. Retarding is applied only to the lowest load columns above idle rpm, to ' +
+        'keep it clear of both idle and light cruise.',
+    );
     notes.push(
       'Spark retard alone gives a soft burble. The crackle comes from fuel still being ' +
         'injected on the overrun — see the decel and fuel-cut tables listed below.',

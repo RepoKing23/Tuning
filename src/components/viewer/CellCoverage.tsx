@@ -71,7 +71,11 @@ export function CellCoverage({
         let v: number;
         if (mode === 'count') v = cell.n;
         else if (mode === 'knock') v = cell.knock;
-        else v = cellStat({ n: cell.n, values: new Map([[statChannel, cell.stat]]), knock: cell.knock }, statChannel, mode);
+        else v = cellStat(
+          { n: cell.n, values: new Map([[statChannel, cell.stat]]), knock: cell.knock, overrun: 0 },
+          statChannel,
+          mode,
+        );
         if (Number.isFinite(v) && (mode !== 'count' || v > 0)) {
           if (v < lo) lo = v;
           if (v > hi) hi = v;

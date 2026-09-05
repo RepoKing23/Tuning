@@ -50,6 +50,14 @@ export interface CellStats {
   values: Map<string, number[]>;
   /** Total knock counts observed while in this cell. */
   knock: number;
+  /**
+   * Of `n`, how many were genuine closed-throttle overrun.
+   *
+   * The spark map is indexed only by RPM and load, so the low-load columns are
+   * shared between true overrun and light cruise. Counting them separately is
+   * what lets a profile retard the decel cells without wrecking cruise.
+   */
+  overrun: number;
 }
 
 export interface BinnedTable {
@@ -105,7 +113,7 @@ export function binLog(log: LogFile, opts: BinOptions): BinnedTable {
   for (let r = 0; r < yAxis.length; r++) {
     const row: CellStats[] = [];
     for (let c = 0; c < xAxis.length; c++) {
-      row.push({ n: 0, values: new Map(), knock: 0 });
+      row.push({ n: 0, values: new Map(), knock: 0, overrun: 0 });
     }
     cells.push(row);
   }
@@ -159,11 +167,15 @@ export function binLog(log: LogFile, opts: BinOptions): BinnedTable {
     }
 
     // Overrun: closed throttle with the engine being driven by the wheels.
-    if (filter.excludeOverrun && tps && rpm) {
-      const closed = tps.values[i] <= (tps.min + 2);
+    // Always evaluated, so the count survives even when the filter keeps these
+    // samples rather than rejecting them.
+    let isOverrun = false;
+    if (tps && rpm) {
+      const closed = tps.values[i] <= tps.min + 2;
       const decelerating = rateOfChange(rpm.values, log.time, i) < -50;
-      if (closed && decelerating) { reject('overrun / decel fuel cut'); continue; }
+      isOverrun = closed && decelerating;
     }
+    if (filter.excludeOverrun && isOverrun) { reject('overrun / decel fuel cut'); continue; }
 
     const xv = xCh.values[i];
     const yv = yCh.values[i];
@@ -173,6 +185,7 @@ export function binLog(log: LogFile, opts: BinOptions): BinnedTable {
     const row = nearestIndex(yAxis, yv);
     const cell = cells[row][col];
     cell.n++;
+    if (isOverrun) cell.overrun++;
     used++;
 
     for (const [name, ch] of collected) {
