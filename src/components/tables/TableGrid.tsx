@@ -81,7 +81,7 @@ export function TableGrid({
     if (trimmed === '') { onEdit(r, c, null); return; }
     const parsed = Number(trimmed);
     if (!Number.isFinite(parsed)) return;
-    const quantised = clampAndQuantise(table.scaling, parsed);
+    const quantised = clampAndQuantise(table.scaling, parsed, table.values);
     // Storing a value identical to the ROM's is the same as having no edit.
     onEdit(r, c, quantised === table.values[r][c] ? null : quantised);
   };

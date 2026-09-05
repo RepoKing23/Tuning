@@ -10,7 +10,7 @@ never uploaded anywhere.
 ```bash
 npm install
 npm run dev      # http://localhost:5173
-npm test         # 40 tests against the real sample files
+npm test         # 55 tests against the real sample files
 npm run build    # static site in dist/
 ```
 
@@ -69,6 +69,28 @@ closed-loop fuel trims when the ECU reports them, otherwise wideband AFR against
 the ECU's own target. Railed sensor values (0, 99.9 AFR) are dropped per sample.
 Each MAF part is corrected only from samples inside its own voltage range. The
 result is smoothed, held monotonic, and capped at 10% change per pass.
+
+**AFR / fuelling** compares your wideband against the ECU's own commanded target
+and works out *which table is responsible*, because "3% lean" is not one fault:
+it can be a wrong MAF transfer, a wrong fuel map, or wrong injectors, and those
+are three different tables.
+
+Only open-loop samples are evidence. In closed loop the ECU's O2 feedback holds
+AFR on target no matter how wrong the calibration is, so the error there is ~0 by
+construction and measures the feedback loop rather than the tune. It is reported
+but never tuned on.
+
+The error is then decomposed in stages, each stage working on what the last left
+behind, so no error is charged to two tables at once — which matters because load
+and airflow are strongly correlated on a naturally aspirated engine:
+
+1. The part that tracks sensor voltage → the MAF calibration tables.
+2. The residual that varies by rpm and load → the Fuel Calibration Map.
+3. A flat offset that survives both → injectors, fuel pressure or a global MAF
+   gain. No table fixes that, so it is named as a finding rather than smeared
+   into a map.
+
+Each cause is ranked by size and carries an **Open this table** button.
 
 **Timing advance** works cell by cell on the spark map under one of four
 profiles:
@@ -151,7 +173,7 @@ src/lib/ai/      optional Claude explanation layer
 src/components/  viewer, table and tuning UI
 src/pages/       the three tabs
 samples/         the ROM, definition and logs the tests run against
-tests/           40 tests, all against those real files
+tests/           55 tests, all against those real files
 ```
 
 ## Notes on the defaults

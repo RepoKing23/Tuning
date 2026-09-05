@@ -14,8 +14,10 @@ import type { OverrunWindow, ProfileId } from '../lib/tune/profiles';
 import { OverrunWindowPicker } from '../components/tune/OverrunWindowPicker';
 import { binLog, DEFAULT_FILTER } from '../lib/tune/binning';
 import { blocked } from '../lib/tune/types';
+import { analyseAfr, recommendFuelMap, DEFAULT_AFR_OPTIONS } from '../lib/tune/afr';
+import { AfrDiagnosis } from '../components/tune/AfrDiagnosis';
 
-type Target = 'maf' | 'timing';
+type Target = 'maf' | 'timing' | 'afr';
 
 const MAF_PARTS = [
   'MAF CALIBRATION Part 1  (units)',
@@ -23,7 +25,14 @@ const MAF_PARTS = [
   'MAF CALIBRATION Part 3  (units)',
 ];
 
-export function TunePage() {
+export interface TunePageProps {
+  /** Jump to a table in the ROM Tables tab. */
+  onOpenTable?(name: string): void;
+}
+
+const FUEL_MAP = 'Fuel Calibration Map';
+
+export function TunePage({ onOpenTable }: TunePageProps = {}) {
   const project = useProject();
   const logs = activeLogs(project);
 
@@ -47,21 +56,41 @@ export function TunePage() {
 
   const table: TableData | null = useMemo(() => {
     if (!ready || !def || !rom) return null;
-    const name = target === 'maf' ? mafPart : sparkTableName;
+    const name = target === 'maf' ? mafPart : target === 'afr' ? FUEL_MAP : sparkTableName;
     const found = def.tables.find((t) => t.name === name);
     return found ? readTable(rom, def, found) : null;
   }, [ready, def, rom, target, mafPart, sparkTableName]);
+
+  const mafTables = useMemo(() => {
+    if (!ready || !def || !rom) return [];
+    return MAF_PARTS
+      .map((n) => def.tables.find((t) => t.name === n))
+      .filter((t): t is NonNullable<typeof t> => !!t)
+      .map((t) => readTable(rom, def, t));
+  }, [ready, def, rom]);
+
+  const afrAnalysis = useMemo(() => {
+    if (target !== 'afr' || !table || logs.length === 0) return null;
+    return analyseAfr(
+      logs.map(({ log, health }) => ({ log, health })),
+      mafTables,
+      table,
+      { ...DEFAULT_AFR_OPTIONS, minSamples },
+    );
+  }, [target, table, logs, mafTables, minSamples]);
 
   const recommendation = useMemo(() => {
     if (!table) return blocked('Load a ROM, its definition and a datalog to get suggestions.');
     if (logs.length === 0) return blocked('No logs selected. Tick at least one in the Files panel.');
     const inputs = logs.map(({ log, health }) => ({ log, health }));
-    return target === 'maf'
-      ? recommendMaf(inputs, table, { ...DEFAULT_MAF_OPTIONS, minSamples })
-      : recommendTiming(inputs, table, {
-          profile, minSamples, intensity, timeRange: null, overrunWindow,
-        });
-  }, [table, logs, target, profile, intensity, minSamples, overrunWindow]);
+    if (target === 'maf') return recommendMaf(inputs, table, { ...DEFAULT_MAF_OPTIONS, minSamples });
+    if (target === 'afr') {
+      return recommendFuelMap(inputs, mafTables, table, { ...DEFAULT_AFR_OPTIONS, minSamples });
+    }
+    return recommendTiming(inputs, table, {
+      profile, minSamples, intensity, timeRange: null, overrunWindow,
+    });
+  }, [table, logs, target, profile, intensity, minSamples, overrunWindow, mafTables]);
 
   const healthNotes = useMemo(
     () =>
@@ -119,9 +148,18 @@ export function TunePage() {
             <button className={target === 'maf' ? 'primary' : ''} onClick={() => setTarget('maf')}>
               MAF scaling
             </button>
+            <button className={target === 'afr' ? 'primary' : ''} onClick={() => setTarget('afr')}>
+              AFR / fuelling
+            </button>
           </div>
 
-          {target === 'maf' ? (
+          {target === 'afr' ? (
+            <div className="muted small">
+              Compares your wideband against the ECU's own commanded target, works out which
+              table is responsible, and writes the operating-point part into the{' '}
+              <strong>{FUEL_MAP}</strong>.
+            </div>
+          ) : target === 'maf' ? (
             <label className="small">
               MAF table part
               <select
@@ -217,6 +255,13 @@ export function TunePage() {
           </div>
         ) : (
           <>
+            {target === 'afr' && afrAnalysis && (
+              <AfrDiagnosis
+                analysis={afrAnalysis}
+                onOpenTable={(name) => onOpenTable?.(name)}
+              />
+            )}
+
             {target === 'timing' && activeProfile.warning && (
               <div className="notice bad">
                 <strong>{activeProfile.label}: read this first</strong>

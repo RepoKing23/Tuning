@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { activeLogs, useProject } from '../state/project';
 import { readTable } from '../lib/rom/readTable';
 import { FileBar } from '../components/FileBar';
@@ -7,7 +7,13 @@ import { CopyOut } from '../components/tables/CopyOut';
 import { TableChart } from '../components/tables/TableChart';
 import { binLog, DEFAULT_FILTER } from '../lib/tune/binning';
 
-export function TablesPage() {
+export interface TablesPageProps {
+  /** Table name another tab asked to open, selected once then cleared. */
+  pendingTable?: string | null;
+  onConsumePending?(): void;
+}
+
+export function TablesPage({ pendingTable, onConsumePending }: TablesPageProps = {}) {
   const project = useProject();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
@@ -37,6 +43,15 @@ export function TablesPage() {
     }
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [tables]);
+
+  // Honour a jump requested from the AFR diagnosis.
+  useEffect(() => {
+    if (!pendingTable || !def) return;
+    const match = def.tables.find((t) => t.name === pendingTable)
+      ?? def.tables.find((t) => t.name.startsWith(pendingTable));
+    if (match) setSelectedId(match.id);
+    onConsumePending?.();
+  }, [pendingTable, def, onConsumePending]);
 
   const selected = useMemo(() => {
     if (!ready || !def || !rom) return null;

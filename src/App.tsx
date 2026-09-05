@@ -14,6 +14,8 @@ const TABS: { id: Tab; label: string }[] = [
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('viewer');
+  // A table the AFR diagnosis asked to open, handed to TablesPage once.
+  const [pendingTable, setPendingTable] = useState<string | null>(null);
 
   return (
     <ProjectProvider>
@@ -38,8 +40,14 @@ export default function App() {
         </header>
 
         {tab === 'viewer' && <ViewerPage />}
-        {tab === 'tables' && <TablesPage />}
-        {tab === 'tune' && <TunePage />}
+        {tab === 'tables' && (
+          <TablesPage pendingTable={pendingTable} onConsumePending={() => setPendingTable(null)} />
+        )}
+        {tab === 'tune' && (
+          <TunePage
+            onOpenTable={(name) => { setPendingTable(name); setTab('tables'); }}
+          />
+        )}
       </div>
     </ProjectProvider>
   );

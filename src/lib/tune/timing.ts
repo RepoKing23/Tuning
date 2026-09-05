@@ -222,7 +222,7 @@ export function recommendTiming(
 
       if (delta === 0) { skipped++; continue; }
 
-      const value = clampAndQuantise(table.scaling, current + delta);
+      const value = clampAndQuantise(table.scaling, current + delta, table.values);
       if (value === current) { skipped++; continue; }
 
       suggestions.set(`${r},${c}`, {

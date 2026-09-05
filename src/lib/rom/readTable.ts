@@ -172,8 +172,48 @@ export function quantise(scaling: Scaling, display: number): number {
   return to(rawValue);
 }
 
-/** Clamp a display value to the scaling's declared min/max, then quantise. */
-export function clampAndQuantise(scaling: Scaling, display: number): number {
-  const clamped = Math.min(scaling.max, Math.max(scaling.min, display));
-  return quantise(scaling, clamped);
+/**
+ * The range a value may actually take in this table.
+ *
+ * A definition's `min`/`max` is a slider hint for EcuFlash's UI, not a storage
+ * limit, and real ROMs exceed it: the Fuel Calibration Map in this definition is
+ * declared `max="102"` while the stock image holds 103.9. Treating the hint as
+ * hard would quietly pull a legitimate stock value down, so the usable range is
+ * the declared one widened to cover whatever the ROM itself already contains.
+ *
+ * The storage type remains a genuine limit and is enforced in `quantise`.
+ */
+export function usableRange(scaling: Scaling, observed?: number[][]): [number, number] {
+  let lo = scaling.min;
+  let hi = scaling.max;
+  if (observed) {
+    for (const row of observed) {
+      for (const v of row) {
+        if (!Number.isFinite(v)) continue;
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+    }
+  }
+  return [lo, hi];
+}
+
+/** True when a value leaves the definition's advisory range — worth flagging. */
+export function exceedsAdvisory(scaling: Scaling, value: number): boolean {
+  return Number.isFinite(value) && (value < scaling.min || value > scaling.max);
+}
+
+/**
+ * Clamp a display value to what this table can hold, then quantise.
+ *
+ * Pass the table's current values to widen the advisory range to whatever the
+ * ROM already proves is storable.
+ */
+export function clampAndQuantise(
+  scaling: Scaling,
+  display: number,
+  observed?: number[][],
+): number {
+  const [lo, hi] = usableRange(scaling, observed);
+  return quantise(scaling, Math.min(hi, Math.max(lo, display)));
 }

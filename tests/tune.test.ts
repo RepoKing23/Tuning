@@ -4,11 +4,12 @@ import { resolve } from 'node:path';
 import { parseEvoScanCsv } from '../src/lib/log/parseEvoScanCsv';
 import { assessChannels } from '../src/lib/log/channelHealth';
 import { parseDefinitionXml } from '../src/lib/rom/parseDefinitionXml';
-import { readTable } from '../src/lib/rom/readTable';
+import { readTable, clampAndQuantise, usableRange, exceedsAdvisory } from '../src/lib/rom/readTable';
 import { recommendMaf, DEFAULT_MAF_OPTIONS } from '../src/lib/tune/maf';
 import { recommendTiming } from '../src/lib/tune/timing';
-import { advanceCeiling, PROFILES, snapWindow } from '../src/lib/tune/profiles';
+import { advanceCeiling, PROFILES, snapWindow, MIN_SAMPLES } from '../src/lib/tune/profiles';
 import { binLog, DEFAULT_FILTER } from '../src/lib/tune/binning';
+import { analyseAfr, recommendFuelMap } from '../src/lib/tune/afr';
 import type { ProfileId } from '../src/lib/tune/profiles';
 
 const root = resolve(__dirname, '..');
@@ -231,20 +232,38 @@ describe('MAF part voltage ranges', () => {
   });
 
   it('routes each sample to the part that actually covers its voltage', () => {
-    // The three parts tile the sensor range: 0.00-1.68, 1.72-3.40, 3.44-5.00 V.
-    // These logs run 1.33-4.04 V, so Part 2 carries the bulk of the driving.
-    const part2 = tableNamed('MAF CALIBRATION Part 2  (units)');
-    const rec2 = recommendMaf(inputs, part2, { ...DEFAULT_MAF_OPTIONS, minSamples: 8 });
-    expect(rec2.status).toBe('ok');
-    expect(rec2.suggestions.size).toBeGreaterThan(0);
+    // A synthetic open-loop log parked at 2.6 V, which only Part 2 covers.
+    const header = 'LogEntrySeconds,RPM,Load,TPS,MAF_Voltage,WideBandAF,Target_AFR,KnockSum\n';
+    // Values have to move: a perfectly flat channel is flagged stuck by the
+    // health gate, correctly, and then carries no feedback to tune on.
+    const rows = Array.from({ length: 600 }, (_, i) => {
+      const volts = (2.58 + (i % 5) * 0.01).toFixed(3);
+      const wb = (12.9 + (i % 7) * 0.05).toFixed(2);
+      return `${(i * 0.1).toFixed(3)},3500,60,60,${volts},${wb},12.5,0`;
+    });
+    const log = parseEvoScanCsv(header + rows.join('\n'), 'at2v6.csv');
+    const one = [{ log, health: assessChannels(log) }];
 
-    // Part 3 starts at 3.44 V, which these logs barely reach, so it correctly
-    // has little or nothing to say rather than inventing a correction.
+    const part1 = tableNamed('MAF CALIBRATION Part 1  (units)');
+    const part2 = tableNamed('MAF CALIBRATION Part 2  (units)');
     const part3 = tableNamed('MAF CALIBRATION Part 3  (units)');
-    const rec3 = recommendMaf(inputs, part3);
-    if (rec3.status === 'ok') {
-      expect(rec3.suggestions.size).toBeLessThan(rec2.suggestions.size);
-    }
+
+    // Only the part whose voltage range contains 2.6 V may be corrected.
+    expect(recommendMaf(one, part2).status).toBe('ok');
+    expect(recommendMaf(one, part2).suggestions.size).toBeGreaterThan(0);
+    expect(recommendMaf(one, part1).status).toBe('blocked');
+    expect(recommendMaf(one, part3).status).toBe('blocked');
+  });
+
+  it('has nothing to say about MAF from logs with too little enrichment', () => {
+    // With closed-loop samples correctly excluded, these logs leave ~250
+    // open-loop samples spread over 44 voltage bins per part — not enough for
+    // any single bin. Saying so is the honest result; the old behaviour only
+    // produced numbers because closed-loop zeros were padding the bins.
+    const part2 = tableNamed('MAF CALIBRATION Part 2  (units)');
+    const rec = recommendMaf(inputs, part2, { ...DEFAULT_MAF_OPTIONS, minSamples: 8 });
+    expect(rec.suggestions.size).toBe(0);
+    expect(rec.message).toMatch(/not enough open-loop/i);
   });
 });
 
@@ -377,5 +396,130 @@ describe('overrun window', () => {
       profile: 'popsAndBangs', minSamples: 12, intensity: 1, timeRange: null,
     });
     expect(implicit.suggestions.size).toBe(explicit.suggestions.size);
+  });
+});
+
+describe('AFR analysis', () => {
+  const mafParts = [
+    'MAF CALIBRATION Part 1  (units)',
+    'MAF CALIBRATION Part 2  (units)',
+    'MAF CALIBRATION Part 3  (units)',
+  ].map(tableNamed);
+  const fuelMap = tableNamed('Fuel Calibration Map');
+
+  it('separates closed loop from open loop and only trusts open loop', () => {
+    const a = analyseAfr(inputs, mafParts, fuelMap);
+    expect(a.status).toBe('ok');
+
+    // Closed loop is ~0 by construction: O2 feedback holds AFR on target there
+    // whatever the calibration says, so it measures nothing about fuelling.
+    expect(a.closedLoopSamples).toBeGreaterThan(2000);
+    expect(Math.abs(a.closedLoopMedianPct)).toBeLessThan(1);
+
+    // Open loop carries the real error.
+    expect(a.openLoopSamples).toBeGreaterThan(200);
+    expect(a.openLoopMedianPct).toBeGreaterThan(3);
+    expect(a.openLoopMedianPct).toBeLessThan(5);
+
+    expect(a.notes.join(' ')).toMatch(/closed-loop samples sit at/);
+  });
+
+  it('names a cause and the table that fixes it', () => {
+    const a = analyseAfr(inputs, mafParts, fuelMap);
+    expect(a.causes.length).toBeGreaterThan(0);
+    // Ranked largest first.
+    for (let i = 1; i < a.causes.length; i++) {
+      expect(a.causes[i - 1].magnitudePct).toBeGreaterThanOrEqual(a.causes[i].magnitudePct);
+    }
+    const fuel = a.causes.find((c) => c.id === 'fuelMap');
+    if (fuel) expect(fuel.table).toBe('Fuel Calibration Map');
+    // A flat offset is honestly reported as fixable by no table at all.
+    const global = a.causes.find((c) => c.id === 'global');
+    if (global) expect(global.table).toBeNull();
+  });
+
+  it('reports how far up the load axis it actually has evidence', () => {
+    const a = analyseAfr(inputs, mafParts, fuelMap);
+    expect(a.openLoopMaxLoad).toBeGreaterThan(40);
+    expect(a.openLoopMaxLoad).toBeLessThan(60);
+    expect(a.notes.join(' ')).toMatch(/says nothing about fuelling there/);
+  });
+
+  it('refuses a narrowband trace that never settles rich', () => {
+    // Switches around stoich, never holds a rich value — what a narrowband
+    // converted to AFR looks like. Tuning on it would be tuning on fiction.
+    const header = 'LogEntrySeconds,RPM,Load,TPS,MAF_Voltage,WideBandAF,Target_AFR\n';
+    const rows = Array.from({ length: 400 }, (_, i) =>
+      `${(i * 0.1).toFixed(3)},3000,60,60,2.5,${(14.7 + (i % 2 ? 0.4 : -0.4)).toFixed(2)},12.5`);
+    const log = parseEvoScanCsv(header + rows.join('\n'), 'narrowband.csv');
+    const a = analyseAfr([{ log, health: assessChannels(log) }], mafParts, fuelMap);
+    expect(a.status).toBe('blocked');
+    expect(a.message).toMatch(/narrowband/i);
+  });
+
+  it('blocks when there is no enrichment to measure', () => {
+    const header = 'LogEntrySeconds,RPM,Load,TPS,MAF_Voltage,WideBandAF,Target_AFR\n';
+    const rows = Array.from({ length: 300 }, (_, i) =>
+      `${(i * 0.1).toFixed(3)},2000,30,20,2.1,14.7,14.7`);
+    const log = parseEvoScanCsv(header + rows.join('\n'), 'cruise.csv');
+    const a = analyseAfr([{ log, health: assessChannels(log) }], mafParts, fuelMap);
+    expect(a.status).toBe('blocked');
+    expect(a.message).toMatch(/open-loop samples/);
+  });
+
+  it('writes fuel corrections only where there is enough data', () => {
+    const rec = recommendFuelMap(inputs, mafParts, fuelMap);
+    expect(rec.status).toBe('ok');
+    for (const [key, s] of rec.suggestions) {
+      const [r, c] = key.split(',').map(Number);
+      expect(s.samples).toBeGreaterThanOrEqual(MIN_SAMPLES);
+      expect(s.value).toBe(fuelMap.values[r][c] + s.delta);
+      // Capped per pass, as everywhere else in the recommender.
+      expect(Math.abs(s.delta) / fuelMap.values[r][c]).toBeLessThanOrEqual(0.051);
+    }
+    expect(rec.starved).toBeGreaterThan(0);
+  });
+
+  it('does not charge the same error to both the MAF and the fuel map', () => {
+    // The fuel map only ever receives the residual left after the airflow
+    // component is removed, so its correction must be smaller than the raw
+    // open-loop error it would have absorbed unattributed.
+    const a = analyseAfr(inputs, mafParts, fuelMap);
+    const rec = recommendFuelMap(inputs, mafParts, fuelMap);
+    const worst = Math.max(
+      0,
+      ...[...rec.suggestions.values()].map((s) => Math.abs(s.delta) / fuelMap.values[0][0] * 100),
+    );
+    expect(worst).toBeLessThan(Math.abs(a.openLoopMedianPct) + 5);
+  });
+});
+
+describe('advisory vs storable range', () => {
+  it('does not clamp a value the ROM itself already holds', () => {
+    // The Fuel Calibration Map is declared max="102" yet the stock image
+    // contains 103.9. EcuFlash's min/max is a slider hint, not a storage limit,
+    // so treating it as hard would quietly pull a legitimate value down.
+    const fuelMap = tableNamed('Fuel Calibration Map');
+    const observedMax = Math.max(...fuelMap.values.flat());
+    expect(observedMax).toBeGreaterThan(fuelMap.scaling.max);
+
+    expect(clampAndQuantise(fuelMap.scaling, observedMax, fuelMap.values)).toBeCloseTo(observedMax, 1);
+    expect(usableRange(fuelMap.scaling, fuelMap.values)[1]).toBeCloseTo(observedMax, 1);
+    expect(exceedsAdvisory(fuelMap.scaling, observedMax)).toBe(true);
+
+    // The storage type is still a real limit.
+    expect(clampAndQuantise(fuelMap.scaling, 1e6, fuelMap.values)).toBeLessThan(200);
+  });
+});
+
+describe('MAF closed-loop exclusion', () => {
+  it('drops closed-loop samples, whose error is zero by construction', () => {
+    const part2 = tableNamed('MAF CALIBRATION Part 2  (units)');
+    const rec = recommendMaf(inputs, part2, { ...DEFAULT_MAF_OPTIONS, minSamples: 4 });
+    if (rec.status === 'ok') {
+      expect(rec.notes.join(' ')).toMatch(/closed-loop samples were excluded/);
+    } else {
+      expect(rec.message).toMatch(/closed loop|voltage range/i);
+    }
   });
 });

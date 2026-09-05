@@ -28,6 +28,17 @@ export interface MafOptions {
  */
 const MAX_CREDIBLE_ERROR_PCT = 40;
 
+/**
+ * A commanded target at or above this counts as closed loop.
+ *
+ * In closed loop the ECU's own O2 feedback drives measured AFR onto the target
+ * whatever the MAF is doing, so the wideband error there is ~0 by construction
+ * and measures nothing. Averaging those samples in dilutes the real open-loop
+ * signal and makes the correction too small. The error has not vanished — it
+ * has moved into the fuel trims, which is where the trims path reads it.
+ */
+export const CLOSED_LOOP_TARGET_AFR = 14.6;
+
 export const DEFAULT_MAF_OPTIONS: MafOptions = {
   maxChangePct: 10,
   minSamples: MIN_SAMPLES,
@@ -100,6 +111,7 @@ export function recommendMaf(
   let rejected = 0;
   let railed = 0;
   let outOfPart = 0;
+  let closedLoop = 0;
 
   for (const { log, feedback } of usable) {
     const maf = log.byName.get('MAF_Voltage');
@@ -142,6 +154,11 @@ export function recommendMaf(
           railed++;
           continue;
         }
+        if (want >= CLOSED_LOOP_TARGET_AFR) {
+          rejected++;
+          closedLoop++;
+          continue;
+        }
         // Lean of target means less fuel went in than intended, which means the
         // MAF over-reported air. Sign matches the trim convention.
         error = (measured / want - 1) * -100;
@@ -153,6 +170,15 @@ export function recommendMaf(
       errorsPerBin[nearestIndex(voltAxis, v)].push(error);
       considered++;
     }
+  }
+
+  if (considered === 0 && closedLoop > 0) {
+    return blocked(
+      `Every usable sample in this part's voltage range was closed loop, where the ECU's own ` +
+        'O2 feedback holds AFR on target regardless of MAF error. Log some enrichment — part ' +
+        'or full throttle — so the wideband has something real to measure.',
+      notes,
+    );
   }
 
   if (considered === 0) {
@@ -209,7 +235,7 @@ export function recommendMaf(
 
   const suggestions = new Map<string, CellSuggestion>();
   for (let i = 0; i < voltAxis.length; i++) {
-    const value = clampAndQuantise(table.scaling, proposed[i]);
+    const value = clampAndQuantise(table.scaling, proposed[i], table.values);
     if (value === current[i]) continue;
     const { n, error } = perBin[i];
     suggestions.set(`${i},0`, {
@@ -235,6 +261,13 @@ export function recommendMaf(
         : '') +
       '.',
   );
+  if (closedLoop > 0) {
+    notes.push(
+      `${closedLoop.toLocaleString()} closed-loop samples were excluded. Their error is ~0 by ` +
+        'construction, since O2 feedback holds AFR on target no matter how wrong the MAF is, ' +
+        'so including them would only shrink the correction.',
+    );
+  }
   if (outOfPart > 0) {
     notes.push(
       `${outOfPart.toLocaleString()} samples fell outside this part's ` +
@@ -249,9 +282,17 @@ export function recommendMaf(
 
   return {
     status: 'ok',
-    message:
-      `${suggestions.size} of ${voltAxis.length} voltage bins have a correction, using ` +
-      `${source}.`,
+    message: suggestions.size === 0
+      ? `No correction: not enough open-loop samples in any of ${table.def.name}'s ` +
+        `${voltAxis.length} voltage bins. ` +
+        (closedLoop > 0
+          ? 'Closed-loop samples cannot fill them, because O2 feedback holds AFR on target ' +
+            'there whatever the MAF says. Either log STFT and LTFT so the trims can be read ' +
+            'directly, or drive more part- and full-throttle so the wideband has enrichment ' +
+            'to measure.'
+          : 'Drive more of the range this part covers and log again.')
+      : `${suggestions.size} of ${voltAxis.length} voltage bins have a correction, using ` +
+        `${source}.`,
     suggestions,
     notes,
     skipped,
