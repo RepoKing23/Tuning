@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseEvoScanCsv } from '../src/lib/log/parseEvoScanCsv';
 import { assessChannels, fuelFeedback } from '../src/lib/log/channelHealth';
+import { isPlausible } from '../src/lib/log/channelMeta';
 
 const root = resolve(__dirname, '..');
 const load = (file: string) =>
@@ -63,17 +64,26 @@ describe('channel health gate', () => {
     }
   });
 
-  it('flags the wideband as unusable', () => {
+  it('keeps the wideband usable despite its railed samples', () => {
+    // Roughly 10% of samples rail at 0 / 96 / 99.9. Those are sentinels to be
+    // dropped per sample, not grounds for condemning the whole channel: the
+    // rest reads 9.4-22 AFR and tracks commanded enrichment under load.
     for (const log of all) {
-      expect(assessChannels(log).get('WideBandAF')!.status).not.toBe('ok');
+      const h = assessChannels(log).get('WideBandAF')!;
+      expect(h.status).toBe('ok');
+      expect(h.outOfRangeFraction).toBeGreaterThan(0);
+      expect(h.outOfRangeFraction).toBeLessThan(0.2);
     }
+    expect(isPlausible('WideBandAF', 99.9)).toBe(false);
+    expect(isPlausible('WideBandAF', 0)).toBe(false);
+    expect(isPlausible('WideBandAF', 12.6)).toBe(true);
   });
 
   it('flags long-term trims that never move', () => {
     for (const log of all) {
       const h = assessChannels(log).get('LTFT')!;
       expect(h.status).not.toBe('ok');
-      expect(h.reasons.join(' ')).toMatch(/varies by only|stuck/);
+      expect(h.reasons.join(' ')).toMatch(/sits at|stuck/);
     }
   });
 
@@ -93,11 +103,20 @@ describe('channel health gate', () => {
 });
 
 describe('fuel feedback availability', () => {
-  it('reports no usable feedback for these logs', () => {
+  it('falls back to the wideband, since the trims are unusable', () => {
     for (const log of all) {
       const fb = fuelFeedback(log, assessChannels(log));
-      expect(fb.source).toBe('none');
-      expect(fb.reason).toMatch(/MAF scaling needs/);
+      expect(fb.source).toBe('wideband');
+      expect(fb.channels).toEqual(['WideBandAF', 'Target_AFR']);
     }
+  });
+
+  it('reports no feedback when neither trims nor a wideband are logged', () => {
+    const header = 'LogEntrySeconds,RPM,Load,TPS,MAF_Voltage,KnockSum\n';
+    const rows = Array.from({ length: 50 }, (_, i) => `${(i * 0.1).toFixed(3)},2000,30,20,2.1,0`);
+    const bare = parseEvoScanCsv(header + rows.join('\n'), 'bare.csv');
+    const fb = fuelFeedback(bare, assessChannels(bare));
+    expect(fb.source).toBe('none');
+    expect(fb.reason).toMatch(/MAF scaling needs/);
   });
 });

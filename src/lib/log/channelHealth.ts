@@ -19,8 +19,13 @@ export interface ChannelHealth {
 /** Above this fraction out of range, a channel is misconfigured rather than noisy. */
 const OUT_OF_RANGE_DEAD = 0.9;
 const OUT_OF_RANGE_SUSPECT = 0.2;
-/** A fuel trim spanning less than this over a whole log carries no information. */
+/**
+ * A fuel trim is uninformative only when it both sits still AND sits at zero.
+ * A steady +6% long-term trim is not a dead channel — it is precisely the
+ * measurement a MAF correction is built from.
+ */
 const TRIM_MIN_SPAN_PCT = 1.0;
+const TRIM_MIN_MAGNITUDE_PCT = 1.0;
 
 function countUnique(values: Float64Array, cap: number): number {
   const seen = new Set<number>();
@@ -65,7 +70,7 @@ function assessOne(ch: LogChannel, log: LogFile): ChannelHealth {
     }
   }
   const outOfRangeFraction = ch.n ? outOfRange / ch.n : 0;
-  if (meta?.plausible && outOfRangeFraction > 0) {
+  if (meta?.plausible && outOfRangeFraction > OUT_OF_RANGE_SUSPECT) {
     const [lo, hi] = meta.plausible;
     const pct = (outOfRangeFraction * 100).toFixed(0);
     reasons.push(
@@ -85,10 +90,11 @@ function assessOne(ch: LogChannel, log: LogFile): ChannelHealth {
   //    five-minute drive is just as useless as one pinned to a single value.
   const isTrim = ch.group === 'Fuel' && /^(STFT|LTFT)/.test(ch.name);
   const span = ch.max - ch.min;
-  if (isTrim && span < TRIM_MIN_SPAN_PCT) {
+  const magnitude = Math.max(Math.abs(ch.min), Math.abs(ch.max));
+  if (isTrim && span < TRIM_MIN_SPAN_PCT && magnitude < TRIM_MIN_MAGNITUDE_PCT) {
     reasons.push(
-      `varies by only ${span.toFixed(2)}% across the whole log — no closed-loop ` +
-        'correction was recorded, so this cannot be used to scale MAF',
+      `sits at ${ch.mean.toFixed(2)}% and varies by only ${span.toFixed(2)}% across the whole ` +
+        'log — no closed-loop correction was recorded, so this cannot be used to scale MAF',
     );
   }
 
@@ -116,7 +122,6 @@ function assessOne(ch: LogChannel, log: LogFile): ChannelHealth {
       (constant && !meta?.constantOk) ||
       nullFraction > 0.9;
     status = fatal ? 'dead' : 'suspect';
-    if (status === 'ok' && outOfRangeFraction > OUT_OF_RANGE_SUSPECT) status = 'suspect';
   }
 
   return { name: ch.name, status, reasons, outOfRangeFraction, nullFraction, constant, uniqueCount };
@@ -158,7 +163,7 @@ export function fuelFeedback(log: LogFile, health: Map<string, ChannelHealth>): 
     return {
       source: 'trims',
       channels: trimChannels,
-      reason: `using closed-loop fuel trims (${trimChannels.join(' + ')})`,
+      reason: `closed-loop fuel trims (${trimChannels.join(' + ')})`,
     };
   }
 
@@ -166,7 +171,7 @@ export function fuelFeedback(log: LogFile, health: Map<string, ChannelHealth>): 
     return {
       source: 'wideband',
       channels: ['WideBandAF', 'Target_AFR'],
-      reason: 'using wideband AFR error against Target_AFR',
+      reason: 'wideband AFR error against Target_AFR',
     };
   }
 

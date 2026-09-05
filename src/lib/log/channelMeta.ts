@@ -61,6 +61,22 @@ export function metaFor(name: string): Meta {
   return CHANNEL_META[name] ?? { unit: '', group: 'Other' };
 }
 
+/**
+ * Whether one sample is physically believable.
+ *
+ * Sensors rail. A wideband reports 0 before it lights off and 99.9 when the
+ * mixture leaves its measurable range, and those are sentinels, not readings —
+ * averaging them in poisons any calculation that uses the channel. Judged per
+ * sample, so a mostly-good channel keeps its good samples instead of being
+ * condemned wholesale.
+ */
+export function isPlausible(name: string, value: number): boolean {
+  if (Number.isNaN(value)) return false;
+  const range = CHANNEL_META[name]?.plausible;
+  if (!range) return true;
+  return value >= range[0] && value <= range[1];
+}
+
 /** Columns that carry the time base or free text rather than a measurement. */
 export const NON_CHANNEL_COLUMNS = new Set([
   'LogID',
