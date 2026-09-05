@@ -9,8 +9,10 @@ import { TableChart } from '../components/tables/TableChart';
 import { ExplainPanel } from '../components/tune/ExplainPanel';
 import { recommendMaf, DEFAULT_MAF_OPTIONS } from '../lib/tune/maf';
 import { recommendTiming } from '../lib/tune/timing';
-import { OVERRUN_TABLE_HINTS, PROFILES, MIN_SAMPLES } from '../lib/tune/profiles';
-import type { ProfileId } from '../lib/tune/profiles';
+import { OVERRUN_TABLE_HINTS, PROFILES, MIN_SAMPLES, snapWindow } from '../lib/tune/profiles';
+import type { OverrunWindow, ProfileId } from '../lib/tune/profiles';
+import { OverrunWindowPicker } from '../components/tune/OverrunWindowPicker';
+import { binLog, DEFAULT_FILTER } from '../lib/tune/binning';
 import { blocked } from '../lib/tune/types';
 
 type Target = 'maf' | 'timing';
@@ -32,6 +34,7 @@ export function TunePage() {
   const [mafPart, setMafPart] = useState(MAF_PARTS[0]);
   const [sparkTableName, setSparkTableName] = useState('High Octane Spark Map');
   const [showSuggestions, setShowSuggestions] = useState(true);
+  const [overrunWindow, setOverrunWindow] = useState<OverrunWindow | null>(null);
 
   const def = project.definition?.definition ?? null;
   const rom = project.rom?.bytes ?? null;
@@ -55,8 +58,10 @@ export function TunePage() {
     const inputs = logs.map(({ log, health }) => ({ log, health }));
     return target === 'maf'
       ? recommendMaf(inputs, table, { ...DEFAULT_MAF_OPTIONS, minSamples })
-      : recommendTiming(inputs, table, { profile, minSamples, intensity, timeRange: null });
-  }, [table, logs, target, profile, intensity, minSamples]);
+      : recommendTiming(inputs, table, {
+          profile, minSamples, intensity, timeRange: null, overrunWindow,
+        });
+  }, [table, logs, target, profile, intensity, minSamples, overrunWindow]);
 
   const healthNotes = useMemo(
     () =>
@@ -70,6 +75,26 @@ export function TunePage() {
 
   const edits = table ? project.edits[table.def.id] ?? {} : {};
   const activeProfile = PROFILES[profile];
+
+  const coverage = useMemo(() => {
+    if (!table || table.def.dims !== '3D' || logs.length === 0) return undefined;
+    const counts = table.y.values.map(() => table.x.values.map(() => 0));
+    for (const { log, health } of logs) {
+      const binned = binLog(log, {
+        xAxis: table.x.values,
+        yAxis: table.y.values,
+        xChannel: 'Load',
+        yChannel: 'RPM',
+        collect: [],
+        filter: DEFAULT_FILTER,
+        ignoreCoolant: health.get('Cooltemp')?.status !== 'ok',
+      });
+      for (let r = 0; r < counts.length; r++) {
+        for (let c = 0; c < counts[r].length; c++) counts[r][c] += binned.cells[r][c].n;
+      }
+    }
+    return counts;
+  }, [table, logs]);
 
   const applySuggestions = (onlyConfident: boolean) => {
     if (!table) return;
@@ -127,13 +152,31 @@ export function TunePage() {
                     type="radio"
                     name="profile"
                     checked={profile === id}
-                    onChange={() => setProfile(id)}
+                    onChange={() => {
+                      setProfile(id);
+                      setOverrunWindow(PROFILES[id].defaultWindow ?? null);
+                    }}
                   />
                   <span className="name">{PROFILES[id].label}</span>
                   {PROFILES[id].warning && <span className="badge dead">risk</span>}
                 </label>
               ))}
               <div className="muted small" style={{ marginTop: 6 }}>{activeProfile.description}</div>
+
+              {activeProfile.overrun && table && table.def.dims === '3D' && (
+                <OverrunWindowPicker
+                  rpmAxis={table.y.values}
+                  loadAxis={table.x.values}
+                  value={snapWindow(
+                    overrunWindow ?? activeProfile.defaultWindow!,
+                    table.y.values,
+                    table.x.values,
+                  )}
+                  onChange={setOverrunWindow}
+                  onReset={() => setOverrunWindow(activeProfile.defaultWindow ?? null)}
+                  coverage={coverage}
+                />
+              )}
 
               <label className="small" style={{ display: 'block', marginTop: 10 }}>
                 Intensity: {intensity.toFixed(1)}×

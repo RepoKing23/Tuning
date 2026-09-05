@@ -9,6 +9,47 @@
 
 export type ProfileId = 'eco' | 'power' | 'popsAndBangs' | 'flames';
 
+/**
+ * The rectangle of the spark map an overrun profile works on, in axis units.
+ *
+ * Which cells the engine passes through on a closed throttle depends on the
+ * car — gearing, exhaust, how you drive — so this is a choice rather than a
+ * constant. Bounds are inclusive and snap to the table's own breakpoints in the
+ * UI, so a window always names whole cells.
+ */
+export interface OverrunWindow {
+  rpmMin: number;
+  rpmMax: number;
+  loadMin: number;
+  loadMax: number;
+}
+
+export function inWindow(w: OverrunWindow, rpm: number, load: number): boolean {
+  return rpm >= w.rpmMin && rpm <= w.rpmMax && load >= w.loadMin && load <= w.loadMax;
+}
+
+const nearest = (axis: number[], v: number): number =>
+  axis.length === 0
+    ? v
+    : axis.reduce((best, x) => (Math.abs(x - v) < Math.abs(best - v) ? x : best), axis[0]);
+
+/**
+ * Move a window's bounds onto the table's own breakpoints.
+ *
+ * A default like "load from 0" is a convenient way to say "from the bottom",
+ * but a bound that sits between cells cannot be shown in a picker that lists
+ * real axis values. Snapping keeps what the user sees and what the engine
+ * applies identical.
+ */
+export function snapWindow(w: OverrunWindow, rpmAxis: number[], loadAxis: number[]): OverrunWindow {
+  return {
+    rpmMin: nearest(rpmAxis, w.rpmMin),
+    rpmMax: nearest(rpmAxis, w.rpmMax),
+    loadMin: nearest(loadAxis, w.loadMin),
+    loadMax: nearest(loadAxis, w.loadMax),
+  };
+}
+
 export interface Profile {
   id: ProfileId;
   label: string;
@@ -32,8 +73,13 @@ export interface Profile {
   overrunTargetDeg?: number;
   /** Scales every suggested step. 1.0 is the profile's full nominal step. */
   aggression: number;
-  /** Cells the profile wants to change. */
+  /** Cells the profile wants to change. Unused by overrun profiles. */
   region: (rpm: number, load: number) => boolean;
+  /**
+   * Starting overrun window, which the user can move. Idle is deliberately
+   * excluded: retarding it past TDC stalls the engine.
+   */
+  defaultWindow?: OverrunWindow;
   /** True when the profile works on overrun cells rather than driven ones. */
   overrun: boolean;
 }
@@ -79,6 +125,7 @@ export const PROFILES: Record<ProfileId, Profile> = {
     overrunTargetDeg: -10,
     aggression: 1,
     region: (rpm, load) => load <= 20 && rpm >= 1500 && rpm <= 4500,
+    defaultWindow: { rpmMin: 1500, rpmMax: 4500, loadMin: 0, loadMax: 20 },
     overrun: true,
   },
   flames: {
@@ -97,6 +144,7 @@ export const PROFILES: Record<ProfileId, Profile> = {
     overrunTargetDeg: -20,
     aggression: 1,
     region: (rpm, load) => load <= 30 && rpm >= 1500,
+    defaultWindow: { rpmMin: 1500, rpmMax: 6500, loadMin: 0, loadMax: 30 },
     overrun: true,
   },
 };

@@ -5,9 +5,9 @@ import type { TableData } from '../rom/readTable';
 import { binLog, DEFAULT_FILTER, iqr, median, OVERRUN_FILTER } from './binning';
 import type { CellStats } from './binning';
 import {
-  advanceCeiling, KNOCK_PER_DEGREE, MIN_SAMPLES, PROFILES, SATURATION_SAMPLES,
+  advanceCeiling, inWindow, KNOCK_PER_DEGREE, MIN_SAMPLES, PROFILES, SATURATION_SAMPLES,
 } from './profiles';
-import type { ProfileId } from './profiles';
+import type { OverrunWindow, ProfileId } from './profiles';
 import { blocked } from './types';
 import type { CellSuggestion, Recommendation } from './types';
 
@@ -24,6 +24,11 @@ export interface TimingOptions {
   intensity: number;
   /** Restrict analysis to a time window. */
   timeRange?: [number, number] | null;
+  /**
+   * Which cells the overrun profiles retard. Defaults to the profile's own
+   * starting window when omitted.
+   */
+  overrunWindow?: OverrunWindow | null;
 }
 
 export const DEFAULT_TIMING_OPTIONS: TimingOptions = {
@@ -70,6 +75,9 @@ export function recommendTiming(
 
   const profile = PROFILES[options.profile];
   const notes: string[] = [];
+  const overrunWindow =
+    options.overrunWindow ??
+    profile.defaultWindow ?? { rpmMin: 1500, rpmMax: 6500, loadMin: 0, loadMax: 20 };
 
   if (table.nx < 2 || table.ny < 2) {
     return blocked(`${table.def.name} is not a 3D spark map.`);
@@ -154,7 +162,11 @@ export function recommendTiming(
         reason =
           `${cell.knock} knock count(s) recorded here across ${cell.n} samples — ` +
           `pulling ${degrees}°. Knock always overrides the profile.`;
-      } else if (!profile.region(rpm, load)) {
+      } else if (
+        profile.overrun
+          ? !inWindow(overrunWindow, rpm, load)
+          : !profile.region(rpm, load)
+      ) {
         skipped++;
         continue;
       } else if (profile.overrun) {
@@ -253,6 +265,11 @@ export function recommendTiming(
         (profile.overrunTargetDeg ?? 0) * profile.aggression * options.intensity,
       )}° (after TDC). Positive advance burns the charge in the cylinder and makes no ` +
         'noise at all, so a relative retard from the stock 28-45° would do nothing.',
+    );
+    const span = (lo: number, hi: number) => (lo === hi ? `${lo}` : `${lo}-${hi}`);
+    notes.push(
+      `Window: ${span(overrunWindow.rpmMin, overrunWindow.rpmMax)} rpm at ` +
+        `${span(overrunWindow.loadMin, overrunWindow.loadMax)} Ev% load.`,
     );
     notes.push(
       `Your logs confirm closed-throttle deceleration in ${confirmedOverrun} of the changed ` +

@@ -7,7 +7,7 @@ import { parseDefinitionXml } from '../src/lib/rom/parseDefinitionXml';
 import { readTable } from '../src/lib/rom/readTable';
 import { recommendMaf, DEFAULT_MAF_OPTIONS } from '../src/lib/tune/maf';
 import { recommendTiming } from '../src/lib/tune/timing';
-import { advanceCeiling, PROFILES } from '../src/lib/tune/profiles';
+import { advanceCeiling, PROFILES, snapWindow } from '../src/lib/tune/profiles';
 import { binLog, DEFAULT_FILTER } from '../src/lib/tune/binning';
 import type { ProfileId } from '../src/lib/tune/profiles';
 
@@ -317,5 +317,65 @@ describe('overrun profiles', () => {
     const reasons = [...rec.suggestions.values()].map((s) => s.reason).join(' ');
     expect(reasons).toMatch(/no closed-throttle deceleration in this cell/);
     expect(rec.notes.join(' ')).toMatch(/after TDC/);
+  });
+});
+
+describe('overrun window', () => {
+  const windowed = (w: Parameters<typeof snapWindow>[0]) =>
+    recommendTiming(inputs, spark, {
+      profile: 'popsAndBangs', minSamples: 12, intensity: 1, timeRange: null, overrunWindow: w,
+    });
+
+  it('only changes cells inside the chosen window', () => {
+    const rec = windowed({ rpmMin: 2000, rpmMax: 3000, loadMin: 10, loadMax: 10 });
+    const cells = [...rec.suggestions.entries()].filter(([, s]) => s.knock === 0);
+    expect(cells.length).toBeGreaterThan(0);
+    for (const [key] of cells) {
+      const [r, c] = key.split(',').map(Number);
+      expect(spark.y.values[r]).toBeGreaterThanOrEqual(2000);
+      expect(spark.y.values[r]).toBeLessThanOrEqual(3000);
+      expect(spark.x.values[c]).toBe(10);
+    }
+  });
+
+  it('changes more cells as the window widens', () => {
+    const narrow = windowed({ rpmMin: 2000, rpmMax: 2500, loadMin: 10, loadMax: 10 });
+    const wide = windowed({ rpmMin: 1500, rpmMax: 6500, loadMin: 10, loadMax: 30 });
+    const count = (r: typeof narrow) =>
+      [...r.suggestions.values()].filter((s) => s.knock === 0).length;
+    expect(count(wide)).toBeGreaterThan(count(narrow));
+  });
+
+  it('changes nothing when the window selects no cells', () => {
+    // Above the top of the load axis, so no cell qualifies.
+    const rec = windowed({ rpmMin: 6500, rpmMax: 6500, loadMin: 300, loadMax: 400 });
+    expect([...rec.suggestions.values()].filter((s) => s.knock === 0)).toHaveLength(0);
+  });
+
+  it('snaps bounds onto the table breakpoints', () => {
+    // "From load 0" is a convenient default but sits below the axis, which
+    // starts at 10; a picker listing real axis values could not show it.
+    const snapped = snapWindow(
+      { rpmMin: 1500, rpmMax: 6500, loadMin: 0, loadMax: 20 },
+      spark.y.values,
+      spark.x.values,
+    );
+    expect(snapped.loadMin).toBe(10);
+    expect(spark.x.values).toContain(snapped.loadMin);
+    expect(spark.y.values).toContain(snapped.rpmMin);
+
+    // An off-grid rpm lands on the nearest real breakpoint, not between cells.
+    expect(snapWindow(
+      { rpmMin: 1600, rpmMax: 4400, loadMin: 12, loadMax: 28 },
+      spark.y.values, spark.x.values,
+    )).toEqual({ rpmMin: 1500, rpmMax: 4500, loadMin: 10, loadMax: 30 });
+  });
+
+  it('falls back to the profile default when no window is given', () => {
+    const explicit = windowed(PROFILES.popsAndBangs.defaultWindow!);
+    const implicit = recommendTiming(inputs, spark, {
+      profile: 'popsAndBangs', minSamples: 12, intensity: 1, timeRange: null,
+    });
+    expect(implicit.suggestions.size).toBe(explicit.suggestions.size);
   });
 });

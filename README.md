@@ -80,6 +80,14 @@ profiles:
 | Pops & bangs | Drives the closed-throttle overrun cells to about 10° after TDC. |
 | Flames | The same mechanism at about 20° after TDC, across a wider rpm band. |
 
+The two overrun profiles let you pick the exact block of cells they work on —
+RPM from/to and load from/to, chosen from the loaded spark map's own breakpoints
+so a window always names whole cells. Which cells your engine passes through on
+a closed throttle depends on gearing, exhaust and how you drive, so the defaults
+are a starting point rather than an answer. The picker reports how many cells
+are selected and how many your logs actually visited, and warns if the window
+reaches down into idle or up into real throttle.
+
 Two rules are enforced in code, in every profile:
 
 - **A cell that recorded knock never gets advance.** It gets retard proportional
