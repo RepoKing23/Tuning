@@ -3,6 +3,7 @@ import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import type { LogFile } from '../../lib/log/types';
 import { colorFor } from '../../lib/log/palette';
+import { isPlausible } from '../../lib/log/channelMeta';
 
 export interface LogChartProps {
   log: LogFile;
@@ -15,6 +16,22 @@ export interface LogChartProps {
   /** Current x-range, so the overview strip and parent stay in sync. */
   onZoom?: (range: [number, number] | null) => void;
   height?: number;
+  /**
+   * Put every channel sharing a unit on one Y scale, so two AFR traces (or two
+   * temperatures) can actually be read against each other. With each channel on
+   * its own auto-scale they are drawn at unrelated magnifications and comparing
+   * them is meaningless.
+   */
+  groupScalesByUnit?: boolean;
+  /**
+   * Draw railed sensor readings as gaps rather than as data.
+   *
+   * A wideband reports 0 before light-off and 99.9 outside its measurable range.
+   * Plotted literally, those sentinels stretch the axis to 0-100 and compress
+   * the real 9-22 AFR signal into a sliver. The tuning engine already discards
+   * them per sample; this keeps the chart agreeing with the analysis.
+   */
+  hideRailedSamples?: boolean;
 }
 
 /**
@@ -81,7 +98,15 @@ function fmtTime(seconds: number): string {
   return `${m}:${s.toFixed(2).padStart(5, '0')}`;
 }
 
-export function LogChart({ log, visible, focused, onCursor, onZoom, height = 420 }: LogChartProps) {
+/** Scale key for a channel, honouring the group-by-unit option. */
+function scaleKeyFor(unit: string, name: string, groupByUnit: boolean): string {
+  return groupByUnit && unit ? `unit:${unit}` : name;
+}
+
+export function LogChart({
+  log, visible, focused, onCursor, onZoom, height = 420,
+  groupScalesByUnit = true, hideRailedSamples = true,
+}: LogChartProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
   const [width, setWidth] = useState(900);
@@ -112,12 +137,13 @@ export function LogChart({ log, visible, focused, onCursor, onZoom, height = 420
       const col: (number | null)[] = new Array(ch.values.length);
       for (let i = 0; i < ch.values.length; i++) {
         const v = ch.values[i];
-        col[i] = Number.isNaN(v) ? null : v;
+        const drop = Number.isNaN(v) || (hideRailedSamples && !isPlausible(name, v));
+        col[i] = drop ? null : v;
       }
       cols.push(col);
       series.push({
         label: name,
-        scale: name,
+        scale: scaleKeyFor(ch.unit, name, groupScalesByUnit),
         stroke: colorFor(name),
         width: name === focused ? 2 : 1.25,
         points: { show: false },
@@ -137,12 +163,13 @@ export function LogChart({ log, visible, focused, onCursor, onZoom, height = 420
     ];
     if (focused && visible.includes(focused)) {
       const ch = log.byName.get(focused);
+      const unitLabel = groupScalesByUnit && ch?.unit ? ` — shared ${ch.unit} axis` : '';
       axes.push({
-        scale: focused,
+        scale: scaleKeyFor(ch?.unit ?? '', focused, groupScalesByUnit),
         stroke: colorFor(focused),
         grid: { stroke: 'rgba(139,149,166,0.09)', width: 1 },
         ticks: { stroke: 'rgba(139,149,166,0.2)' },
-        label: `${focused}${ch?.unit ? ` (${ch.unit})` : ''}`,
+        label: `${focused}${ch?.unit ? ` (${ch.unit})` : ''}${unitLabel}`,
         labelSize: 18,
         labelFont: '11px system-ui',
       });
@@ -177,9 +204,11 @@ export function LogChart({ log, visible, focused, onCursor, onZoom, height = 420
       },
     };
 
-    // Pad each channel's own scale so flat traces do not sit on the frame.
+    // Pad each scale so flat traces do not sit on the frame.
     for (const name of visible) {
-      opts.scales![name] = {
+      const ch = log.byName.get(name);
+      if (!ch) continue;
+      opts.scales![scaleKeyFor(ch.unit, name, groupScalesByUnit)] = {
         auto: true,
         range: (_u, dataMin, dataMax) => {
           if (dataMin == null || dataMax == null) return [0, 1];
@@ -195,7 +224,7 @@ export function LogChart({ log, visible, focused, onCursor, onZoom, height = 420
     return () => { plot.destroy(); plotRef.current = null; };
     // `data` is intentionally excluded: it is derived from log/visible.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [log, visible.join('|'), focused, width, height]);
+  }, [log, visible.join('|'), focused, width, height, groupScalesByUnit, hideRailedSamples]);
 
   return (
     <div>

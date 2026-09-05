@@ -27,6 +27,14 @@ shift-drag to pan, double-click to reset. Check and uncheck channels in the
 sidebar; click a channel name to give it the left axis. The cursor readout shows
 every visible channel's value at the point you are hovering.
 
+Channels sharing a unit share a Y axis by default, so two AFR traces or two
+temperatures can be read against each other rather than being drawn at unrelated
+magnifications. Railed sensor readings — a wideband's 0 before light-off, or its
+99.9 outside the measurable range — are drawn as gaps rather than as data, since
+plotting them literally stretches the axis to 0-100 and compresses the real
+9-22 AFR signal into a sliver. Both are toggles above the chart, and the cursor
+readout still shows the raw value, marked as railed.
+
 Two views tie the log back to the maps you actually edit:
 
 - **Operating points** — RPM against Load, coloured by any third channel, with

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { LogFile } from '../../lib/log/types';
 import { heatColor } from '../../lib/log/palette';
+import { isPlausible } from '../../lib/log/channelMeta';
 
 export interface ScatterViewProps {
   logs: LogFile[];
@@ -72,7 +73,10 @@ export function ScatterView({
         const x = xc.values[i];
         const y = yc.values[i];
         if (Number.isNaN(x) || Number.isNaN(y)) continue;
-        const c = cc ? cc.values[i] : NaN;
+        // Railed sentinels would stretch the colour ramp across a range the
+        // real data never occupies, flattening every genuine difference.
+        const raw = cc ? cc.values[i] : NaN;
+        const c = cc && isPlausible(colorChannel, raw) ? raw : NaN;
         pts.push({ x, y, c });
         if (x < xMin) xMin = x; if (x > xMax) xMax = x;
         if (y < yMin) yMin = y; if (y > yMax) yMax = y;

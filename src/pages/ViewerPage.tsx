@@ -8,6 +8,7 @@ import { CellCoverage } from '../components/viewer/CellCoverage';
 import type { CoverageMode } from '../components/viewer/CellCoverage';
 import { FileBar } from '../components/FileBar';
 import { colorFor } from '../lib/log/palette';
+import { isPlausible } from '../lib/log/channelMeta';
 import { HealthSummary } from '../components/viewer/HealthSummary';
 
 const DEFAULT_VISIBLE = ['RPM', 'Load', 'TimingAdv', 'MAF_Voltage'];
@@ -31,6 +32,8 @@ export function ViewerPage() {
   const [colorChannel, setColorChannel] = useState('TimingAdv');
   const [mode, setMode] = useState<CoverageMode>('count');
   const [statChannel, setStatChannel] = useState('TimingAdv');
+  const [groupScales, setGroupScales] = useState(true);
+  const [hideRailed, setHideRailed] = useState(true);
 
   // Prefer the spark map's real axes so the coverage grid matches the table
   // you will actually be editing.
@@ -91,12 +94,32 @@ export function ViewerPage() {
             <HealthSummary log={primary.log} health={primary.health} />
 
             <div className="chart-wrap" style={{ marginBottom: 12 }}>
+              <div className="row small" style={{ justifyContent: 'flex-end', gap: 14 }}>
+                <label className="row small muted" style={{ gap: 5 }}>
+                  <input
+                    type="checkbox"
+                    checked={groupScales}
+                    onChange={(e) => setGroupScales(e.target.checked)}
+                  />
+                  share Y axis between channels of the same unit
+                </label>
+                <label className="row small muted" style={{ gap: 5 }}>
+                  <input
+                    type="checkbox"
+                    checked={hideRailed}
+                    onChange={(e) => setHideRailed(e.target.checked)}
+                  />
+                  hide railed sensor values
+                </label>
+              </div>
               <LogChart
                 log={primary.log}
                 visible={visible}
                 focused={focused}
                 onCursor={setCursorRow}
                 onZoom={setZoom}
+                groupScalesByUnit={groupScales}
+                hideRailedSamples={hideRailed}
               />
               <div className="cursor-readout">
                 {visible.length === 0 && <span className="muted">No channels selected</span>}
@@ -104,12 +127,17 @@ export function ViewerPage() {
                   const ch = primary.log.byName.get(name);
                   if (!ch) return null;
                   const v = cursorRow !== null ? ch.values[cursorRow] : NaN;
+                  const railed = !Number.isNaN(v) && !isPlausible(name, v);
                   return (
                     <span className="item" key={name}>
                       <span className="dot" style={{ background: colorFor(name) }} />
                       {name}
-                      <strong>{Number.isNaN(v) ? '—' : v.toFixed(2).replace(/\.00$/, '')}</strong>
-                      <span className="muted">{ch.unit}</span>
+                      <strong style={railed ? { color: 'var(--warn)' } : undefined}>
+                        {Number.isNaN(v) ? '—' : v.toFixed(2).replace(/\.00$/, '')}
+                      </strong>
+                      <span className="muted">
+                        {railed ? 'railed — not a reading' : ch.unit}
+                      </span>
                     </span>
                   );
                 })}
