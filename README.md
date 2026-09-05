@@ -10,7 +10,7 @@ never uploaded anywhere.
 ```bash
 npm install
 npm run dev      # http://localhost:5173
-npm test         # 35 tests against the real sample files
+npm test         # 40 tests against the real sample files
 npm run build    # static site in dist/
 ```
 
@@ -135,7 +135,7 @@ src/lib/ai/      optional Claude explanation layer
 src/components/  viewer, table and tuning UI
 src/pages/       the three tabs
 samples/         the ROM, definition and logs the tests run against
-tests/           35 tests, all against those real files
+tests/           40 tests, all against those real files
 ```
 
 ## Notes on the defaults
