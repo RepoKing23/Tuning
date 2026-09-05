@@ -117,8 +117,12 @@ export function recommendMaf(
     const maf = log.byName.get('MAF_Voltage');
     if (!maf) { notes.push(`${log.name}: no MAF_Voltage channel, skipped.`); continue; }
 
-    const stft = log.byName.get('STFT');
-    const ltft = log.byName.get('LTFT') ?? log.byName.get('LTFT_Cruise');
+    // Use whatever fuelFeedback actually selected, rather than assuming the
+    // generic names: on this ECU the informative long-term trim is often a
+    // region-specific channel like LTFT_Cruise while plain LTFT reads zero.
+    const trimChannels = feedback.channels
+      .map((n) => log.byName.get(n))
+      .filter((c): c is NonNullable<typeof c> => !!c);
     const wb = log.byName.get('WideBandAF');
     const target = log.byName.get('Target_AFR');
     const rpm = log.byName.get('RPM');
@@ -139,10 +143,17 @@ export function recommendMaf(
 
       let error: number;
       if (feedback.source === 'trims') {
-        const s = stft ? stft.values[i] : NaN;
-        const l = ltft ? ltft.values[i] : NaN;
-        if (Number.isNaN(s) && Number.isNaN(l)) { rejected++; continue; }
-        error = (Number.isNaN(s) ? 0 : s) + (Number.isNaN(l) ? 0 : l);
+        // Total correction the ECU is applying: short- plus long-term.
+        let total = 0;
+        let seen = 0;
+        for (const ch of trimChannels) {
+          const v = ch.values[i];
+          if (Number.isNaN(v)) continue;
+          total += v;
+          seen++;
+        }
+        if (seen === 0) { rejected++; continue; }
+        error = total;
       } else {
         const measured = wb ? wb.values[i] : NaN;
         const want = target ? target.values[i] : NaN;
@@ -283,14 +294,13 @@ export function recommendMaf(
   return {
     status: 'ok',
     message: suggestions.size === 0
-      ? `No correction: not enough open-loop samples in any of ${table.def.name}'s ` +
-        `${voltAxis.length} voltage bins. ` +
+      ? `No correction: not enough usable samples in any of ${table.def.name}'s ` +
+        `${voltAxis.length} voltage bins (${axisLo.toFixed(2)}-${axisHi.toFixed(2)} V). ` +
         (closedLoop > 0
-          ? 'Closed-loop samples cannot fill them, because O2 feedback holds AFR on target ' +
-            'there whatever the MAF says. Either log STFT and LTFT so the trims can be read ' +
-            'directly, or drive more part- and full-throttle so the wideband has enrichment ' +
-            'to measure.'
-          : 'Drive more of the range this part covers and log again.')
+          ? 'Closed-loop samples cannot fill them on the wideband path, because O2 feedback ' +
+            'holds AFR on target there whatever the MAF says. Either log fuel trims so the ' +
+            'correction can be read directly, or drive more part- and full-throttle.'
+          : 'Drive more of the airflow range this part covers and log again.')
       : `${suggestions.size} of ${voltAxis.length} voltage bins have a correction, using ` +
         `${source}.`,
     suggestions,

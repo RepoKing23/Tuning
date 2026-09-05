@@ -155,15 +155,53 @@ export function fuelFeedback(log: LogFile, health: Map<string, ChannelHealth>): 
     return !!ch && !!h && h.status === 'ok' && ch.n > 0;
   };
 
-  const trimChannels = ['STFT', 'LTFT', 'LTFT_Idle', 'LTFT_Cruise', 'LTFT_High'].filter(usable);
-  const hasShort = trimChannels.some((c) => c.startsWith('STFT'));
-  const hasLong = trimChannels.some((c) => c.startsWith('LTFT'));
+  /**
+   * A trim carries information when it is meaningfully away from zero, or moves.
+   * A steady +5% is the most useful trim there is — it says the ECU is
+   * permanently adding 5% fuel — while a flat 0% says only that nothing is
+   * being corrected.
+   */
+  const informative = (name: string) => {
+    const ch = log.byName.get(name);
+    if (!ch || ch.n === 0) return false;
+    const magnitude = Math.max(Math.abs(ch.min), Math.abs(ch.max));
+    return magnitude >= TRIM_MIN_MAGNITUDE_PCT || ch.max - ch.min >= TRIM_MIN_SPAN_PCT;
+  };
 
-  if (hasShort && hasLong) {
+  // One short-term channel only. On a four-cylinder there is a single bank, so
+  // STFT and STFT#2 are two MUT requests for the same quantity; adding both
+  // would count the same correction twice.
+  const shortCandidates = ['STFT', 'STFT#2'].filter((c) => usable(c) && informative(c));
+  const shortTerm = shortCandidates.length
+    ? [shortCandidates.reduce((best, name) =>
+        Math.abs(log.byName.get(name)!.mean) > Math.abs(log.byName.get(best)!.mean) ? name : best)]
+    : [];
+  // Region-specific long-term trims: the ECU keeps separate cells for idle,
+  // cruise and high load, and typically only the one covering where you drove
+  // holds a correction.
+  const longTerm = ['LTFT', 'LTFT_Idle', 'LTFT_Cruise', 'LTFT_High', 'LTFT_Mid#2', 'LTFT_High#2']
+    .filter((c) => usable(c) && informative(c));
+
+  // A long-term trim alone is the classic MAF-scaling input: it is the steady
+  // state error the ECU has already had to learn. Short-term adds detail but is
+  // not a prerequisite, and requiring it discards a perfectly good measurement.
+  if (longTerm.length > 0) {
+    // With several region trims present, the informative one is the region that
+    // was actually driven; the others sit at zero.
+    const strongest = longTerm.reduce((best, name) => {
+      const a = log.byName.get(name)!;
+      const b = log.byName.get(best)!;
+      return Math.abs(a.mean) > Math.abs(b.mean) ? name : best;
+    });
+    const channels = [...shortTerm, strongest];
     return {
       source: 'trims',
-      channels: trimChannels,
-      reason: `closed-loop fuel trims (${trimChannels.join(' + ')})`,
+      channels,
+      reason:
+        `closed-loop fuel trims (${channels.join(' + ')})` +
+        (shortTerm.length === 0
+          ? ' — long-term only, so this is the correction the ECU has already learned'
+          : ''),
     };
   }
 

@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { parseEvoScanCsv } from '../src/lib/log/parseEvoScanCsv';
 import { assessChannels, fuelFeedback } from '../src/lib/log/channelHealth';
 import { isPlausible } from '../src/lib/log/channelMeta';
+import { loggingAdvice } from '../src/lib/log/loggingAdvice';
 
 const root = resolve(__dirname, '..');
 const load = (file: string) =>
@@ -103,12 +104,37 @@ describe('channel health gate', () => {
 });
 
 describe('fuel feedback availability', () => {
-  it('falls back to the wideband, since the trims are unusable', () => {
+  it('prefers the long-term trim the ECU has actually learned', () => {
+    // Plain LTFT reads 0 in these logs while the region-specific LTFT_Cruise
+    // holds +4.3 to +5.1%. A steady non-zero long-term trim is the classic
+    // MAF-scaling input, so picking the informative channel matters more than
+    // matching a conventional name.
     for (const log of all) {
       const fb = fuelFeedback(log, assessChannels(log));
-      expect(fb.source).toBe('wideband');
-      expect(fb.channels).toEqual(['WideBandAF', 'Target_AFR']);
+      expect(fb.source).toBe('trims');
+      expect(fb.channels).toContain('LTFT_Cruise');
+      // One short-term channel at most: a four-cylinder has a single bank, so
+      // STFT and STFT#2 are the same quantity and adding both double-counts.
+      expect(fb.channels.filter((c) => c.startsWith('STFT'))).toHaveLength(1);
     }
+  });
+
+  it('ignores a long-term trim sitting at zero', () => {
+    for (const log of all) {
+      const fb = fuelFeedback(log, assessChannels(log));
+      expect(fb.channels).not.toContain('LTFT');
+      expect(fb.channels).not.toContain('LTFT_High');
+    }
+  });
+
+  it('falls back to the wideband when no trim carries a correction', () => {
+    const header = 'LogEntrySeconds,RPM,Load,TPS,MAF_Voltage,WideBandAF,Target_AFR,LTFT\n';
+    const rows = Array.from({ length: 200 }, (_, i) =>
+      `${(i * 0.1).toFixed(3)},3000,60,60,2.5,${(12.0 + (i % 5) * 0.1).toFixed(2)},12.5,0`);
+    const log = parseEvoScanCsv(header + rows.join('\n'), 'wb-only.csv');
+    const fb = fuelFeedback(log, assessChannels(log));
+    expect(fb.source).toBe('wideband');
+    expect(fb.channels).toEqual(['WideBandAF', 'Target_AFR']);
   });
 
   it('reports no feedback when neither trims nor a wideband are logged', () => {
@@ -118,5 +144,79 @@ describe('fuel feedback availability', () => {
     const fb = fuelFeedback(bare, assessChannels(bare));
     expect(fb.source).toBe('none');
     expect(fb.reason).toMatch(/MAF scaling needs/);
+  });
+});
+
+describe('logging setup advice', () => {
+  const withHealth = (log: typeof idle) => ({ log, health: assessChannels(log) });
+  const advice = loggingAdvice([idle, drive1, drive2].map(withHealth));
+  const byId = (id: string) => advice.find((a) => a.id === id);
+
+  it('ranks blocking findings above merely important ones', () => {
+    const order = { blocking: 0, important: 1, minor: 2 };
+    for (let i = 1; i < advice.length; i++) {
+      expect(order[advice[i - 1].severity]).toBeLessThanOrEqual(order[advice[i].severity]);
+    }
+  });
+
+  it('flags the sample rate as too coarse for high-rpm work', () => {
+    const a = byId('sample-rate');
+    expect(a).toBeDefined();
+    expect(a!.severity).toBe('important');
+    // ~4.8 Hz on the slowest of these logs.
+    expect(a!.title).toMatch(/[45]\.\d Hz/);
+  });
+
+  it('spots transmission channels that cannot answer on a manual car', () => {
+    const a = byId('sst-channels');
+    expect(a).toBeDefined();
+    expect(a!.detail).toMatch(/TC-SST/);
+    expect(a!.detail).toMatch(/5MT/);
+  });
+
+  it('spots boost channels on a naturally aspirated engine', () => {
+    expect(byId('na-channels')).toBeDefined();
+  });
+
+  it('flags the coolant request that differs between profiles', () => {
+    const a = byId('sensor-Cooltemp');
+    expect(a).toBeDefined();
+    expect(a!.severity).toBe('important');
+    expect(a!.unlocks).toMatch(/warm-engine filter/);
+  });
+
+  it('reports the unmeasured top of the load axis', () => {
+    const a = byId('coverage-load');
+    expect(a).toBeDefined();
+    expect(a!.title).toMatch(/49 Ev%/);
+    expect(a!.detail).toMatch(/third-gear pulls/);
+  });
+
+  it('does not call fuelling blocked, since a long-term trim is present', () => {
+    // LTFT_Cruise carries a real correction, so this is not a blocker.
+    expect(byId('no-feedback')).toBeUndefined();
+    expect(byId('stft')!.severity).toBe('minor');
+  });
+
+  it('calls fuelling blocked when nothing measures it', () => {
+    const header = 'LogEntrySeconds,RPM,Load,TPS,MAF_Voltage,KnockSum\n';
+    const rows = Array.from({ length: 100 }, (_, i) =>
+      `${(i * 0.05).toFixed(3)},${2000 + (i % 9) * 30},${30 + (i % 5)},20,${(2.1 + (i % 4) * 0.02).toFixed(2)},0`);
+    const bare = parseEvoScanCsv(header + rows.join('\n'), 'bare.csv');
+    const a = loggingAdvice([withHealth(bare)]).find((x) => x.id === 'no-feedback');
+    expect(a).toBeDefined();
+    expect(a!.severity).toBe('blocking');
+  });
+
+  it('says nothing when the setup is sound', () => {
+    const header = 'LogEntrySeconds,RPM,Load,TPS,MAF_Voltage,WideBandAF,Target_AFR,LTFT,Cooltemp,KnockSum\n';
+    const rows = Array.from({ length: 2000 }, (_, i) =>
+      `${(i * 0.05).toFixed(3)},${2000 + (i % 40) * 100},${20 + (i % 70)},${20 + (i % 60)},` +
+      `${(1.5 + (i % 30) * 0.08).toFixed(2)},${(12.5 + (i % 9) * 0.2).toFixed(2)},12.5,` +
+      // Coolant has to move: a real sensor cycles with the thermostat, and a
+      // perfectly constant reading is correctly flagged as stuck.
+      `${(4 + (i % 5) * 0.4).toFixed(2)},${(86 + (i % 7) * 0.5).toFixed(1)},0`);
+    const good = parseEvoScanCsv(header + rows.join('\n'), 'good.csv');
+    expect(loggingAdvice([withHealth(good)])).toHaveLength(0);
   });
 });

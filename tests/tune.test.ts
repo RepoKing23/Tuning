@@ -45,12 +45,13 @@ describe('MAF recommender', () => {
     expect(rec.notes.join(' ')).toMatch(/STFT and LTFT|wideband/);
   });
 
-  it('corrects from the real logs using wideband error against target AFR', () => {
+  it('corrects from the real logs using the learned long-term trim', () => {
     const rec = recommendMaf(inputs, mafPart1);
     expect(rec.status).toBe('ok');
-    expect(rec.message).toMatch(/wideband/i);
-    // Railed samples must be reported as dropped, not silently averaged in.
-    expect(rec.notes.join(' ')).toMatch(/railed sensor values/);
+    // Trims outrank the wideband: they are the correction the ECU has already
+    // had to learn, and unlike the wideband they stay meaningful in closed loop.
+    expect(rec.message).toMatch(/LTFT_Cruise/);
+    expect(rec.suggestions.size).toBeGreaterThan(0);
 
     const result = mafPart1.values.map((row, r) => rec.suggestions.get(`${r},0`)?.value ?? row[0]);
     for (let i = 1; i < result.length; i++) {
@@ -255,15 +256,13 @@ describe('MAF part voltage ranges', () => {
     expect(recommendMaf(one, part3).status).toBe('blocked');
   });
 
-  it('has nothing to say about MAF from logs with too little enrichment', () => {
-    // With closed-loop samples correctly excluded, these logs leave ~250
-    // open-loop samples spread over 44 voltage bins per part — not enough for
-    // any single bin. Saying so is the honest result; the old behaviour only
-    // produced numbers because closed-loop zeros were padding the bins.
-    const part2 = tableNamed('MAF CALIBRATION Part 2  (units)');
-    const rec = recommendMaf(inputs, part2, { ...DEFAULT_MAF_OPTIONS, minSamples: 8 });
+  it('has nothing to say about a voltage range the car never reached', () => {
+    // Part 3 starts at 3.44 V and these logs peak at 4.04 V, so almost nothing
+    // lands there. Saying so is the honest result.
+    const part3 = tableNamed('MAF CALIBRATION Part 3  (units)');
+    const rec = recommendMaf(inputs, part3, { ...DEFAULT_MAF_OPTIONS, minSamples: 12 });
     expect(rec.suggestions.size).toBe(0);
-    expect(rec.message).toMatch(/not enough open-loop/i);
+    expect(rec.message).toMatch(/not enough usable samples/i);
   });
 });
 
@@ -513,13 +512,24 @@ describe('advisory vs storable range', () => {
 });
 
 describe('MAF closed-loop exclusion', () => {
-  it('drops closed-loop samples, whose error is zero by construction', () => {
-    const part2 = tableNamed('MAF CALIBRATION Part 2  (units)');
-    const rec = recommendMaf(inputs, part2, { ...DEFAULT_MAF_OPTIONS, minSamples: 4 });
-    if (rec.status === 'ok') {
-      expect(rec.notes.join(' ')).toMatch(/closed-loop samples were excluded/);
-    } else {
-      expect(rec.message).toMatch(/closed loop|voltage range/i);
+  it('drops closed-loop samples on the wideband path, where they measure nothing', () => {
+    // A wideband-only log: no trim carries a correction, so the wideband path
+    // is taken, and its closed-loop samples must be excluded because O2
+    // feedback holds AFR on target there whatever the MAF says.
+    const header = 'LogEntrySeconds,RPM,Load,TPS,MAF_Voltage,WideBandAF,Target_AFR,LTFT\n';
+    const rows: string[] = [];
+    for (let i = 0; i < 600; i++) {
+      const closedLoop = i % 2 === 0;
+      const volts = (2.58 + (i % 5) * 0.01).toFixed(3);
+      const target = closedLoop ? '14.7' : '12.5';
+      const wb = closedLoop
+        ? (14.7 + (i % 3) * 0.05).toFixed(2)
+        : (12.9 + (i % 7) * 0.05).toFixed(2);
+      rows.push(`${(i * 0.1).toFixed(3)},3500,60,60,${volts},${wb},${target},0`);
     }
+    const log = parseEvoScanCsv(header + rows.join('\n'), 'wb-mixed.csv');
+    const rec = recommendMaf([{ log, health: assessChannels(log) }], tableNamed('MAF CALIBRATION Part 2  (units)'));
+    expect(rec.status).toBe('ok');
+    expect(rec.notes.join(' ')).toMatch(/closed-loop samples were excluded/);
   });
 });

@@ -10,7 +10,7 @@ never uploaded anywhere.
 ```bash
 npm install
 npm run dev      # http://localhost:5173
-npm test         # 55 tests against the real sample files
+npm test         # 66 tests against the real sample files
 npm run build    # static site in dist/
 ```
 
@@ -66,7 +66,9 @@ numbers.
 
 **MAF scaling** corrects the transfer function from measured fuelling error —
 closed-loop fuel trims when the ECU reports them, otherwise wideband AFR against
-the ECU's own target. Railed sensor values (0, 99.9 AFR) are dropped per sample.
+the ECU's own target. A long-term trim alone is enough, and the informative
+channel is chosen by content rather than by name: on this ECU plain `LTFT` reads
+zero while the region-specific `LTFT_Cruise` holds the real correction. Railed sensor values (0, 99.9 AFR) are dropped per sample.
 Each MAF part is corrected only from samples inside its own voltage range. The
 result is smoothed, held monotonic, and capped at 10% change per pass.
 
@@ -153,6 +155,13 @@ worthless, so the app checks every channel before it analyses anything: stuck
 values, physically implausible ranges, missing columns, and fuel trims that
 carry no correction information.
 
+Above the chart it also says what to *change* about the logging setup, since
+most of what limits a tune is the data rather than the analysis. Each item is an
+action with a stated payoff: a sample rate too coarse to resolve a pull, channels
+requested with the wrong MUT id, channels that cannot answer on this car at all
+(dual-clutch requests on a manual, boost on a naturally aspirated engine) and are
+therefore pure overhead on every sample, and regions of the map never driven.
+
 Anything that fails is badged in the channel list and explained in the summary at
 the top of the viewer. Where a broken channel makes an analysis impossible — no
 fuel feedback at all, or no knock signal — the recommender returns a blocked
@@ -173,7 +182,7 @@ src/lib/ai/      optional Claude explanation layer
 src/components/  viewer, table and tuning UI
 src/pages/       the three tabs
 samples/         the ROM, definition and logs the tests run against
-tests/           55 tests, all against those real files
+tests/           66 tests, all against those real files
 ```
 
 ## Notes on the defaults

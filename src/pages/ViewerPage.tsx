@@ -10,6 +10,8 @@ import { FileBar } from '../components/FileBar';
 import { colorFor } from '../lib/log/palette';
 import { isPlausible } from '../lib/log/channelMeta';
 import { HealthSummary } from '../components/viewer/HealthSummary';
+import { LoggingAdvice } from '../components/viewer/LoggingAdvice';
+import { loggingAdvice } from '../lib/log/loggingAdvice';
 
 const DEFAULT_VISIBLE = ['RPM', 'Load', 'TimingAdv', 'MAF_Voltage'];
 
@@ -54,6 +56,13 @@ export function ViewerPage() {
     ? primary.log.channels.map((c) => c.name)
     : [];
 
+  // Advice is drawn from every selected log, not just the one being plotted:
+  // a channel that works in one profile and not another is itself the finding.
+  const advice = useMemo(
+    () => loggingAdvice(selected.map(({ log, health }) => ({ log, health }))),
+    [selected],
+  );
+
   const ignoreCoolant = primary
     ? primary.health.get('Cooltemp')?.status !== 'ok'
     : true;
@@ -92,6 +101,7 @@ export function ViewerPage() {
         ) : (
           <>
             <HealthSummary log={primary.log} health={primary.health} />
+            <LoggingAdvice advice={advice} />
 
             <div className="chart-wrap" style={{ marginBottom: 12 }}>
               <div className="row small" style={{ justifyContent: 'flex-end', gap: 14 }}>
