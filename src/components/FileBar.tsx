@@ -13,22 +13,48 @@ export function FileBar() {
     setErrors(await project.loadFiles(Array.from(files)));
   };
 
+  /**
+   * Open the picker restricted to one kind of file. The single "Upload files"
+   * button accepts everything at once; these narrow it when you only want to
+   * swap the ROM or add another log.
+   */
+  const pick = (accepts: string) => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.accept = accepts;
+    input.click();
+  };
+
+  const nothingLoaded = !project.rom && !project.definition && project.logs.length === 0;
+
   return (
     <div className="panel">
       <h2>Files</h2>
 
       <div
         className={`dropzone${over ? ' over' : ''}`}
-        onClick={() => inputRef.current?.click()}
         onDragOver={(e) => { e.preventDefault(); setOver(true); }}
         onDragLeave={() => setOver(false)}
         onDrop={(e) => { e.preventDefault(); setOver(false); void accept(e.dataTransfer.files); }}
       >
-        Drop files here, or click to browse
-        <div className="small" style={{ marginTop: 5 }}>
-          EvoScan <code>.csv</code> logs · EcuFlash <code>.xml</code> definition · ROM <code>.bin</code>
+        <button
+          className="primary"
+          style={{ padding: '8px 18px', fontSize: 13 }}
+          onClick={() => pick('.csv,.xml,.bin,.rom,.hex')}
+        >
+          Upload files
+        </button>
+        <div className="small" style={{ marginTop: 8 }}>
+          or drag and drop them here
+        </div>
+
+        <div className="row" style={{ justifyContent: 'center', marginTop: 10 }}>
+          <button className="small" onClick={() => pick('.csv')}>Log .csv</button>
+          <button className="small" onClick={() => pick('.xml')}>Definition .xml</button>
+          <button className="small" onClick={() => pick('.bin,.rom,.hex')}>ROM .bin</button>
         </div>
       </div>
+
       <input
         ref={inputRef}
         type="file"
@@ -37,6 +63,12 @@ export function FileBar() {
         style={{ display: 'none' }}
         onChange={(e) => { void accept(e.target.files); e.target.value = ''; }}
       />
+
+      {nothingLoaded && (
+        <div className="muted small" style={{ marginTop: 8, textAlign: 'center' }}>
+          Files are read in this browser. Nothing is sent to a server.
+        </div>
+      )}
 
       {errors.length > 0 && (
         <div className="notice bad" style={{ marginTop: 10 }}>

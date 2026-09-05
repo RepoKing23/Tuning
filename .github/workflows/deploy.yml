@@ -1,0 +1,56 @@
+# Publish the tuner to GitHub Pages.
+#
+# The app is a static site with no backend, so the built bundle in dist/ is the
+# whole deployment. ROMs and logs are still read in the visitor's own browser —
+# hosting changes where the page is served from, not where the files go.
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+      - claude/4b11-tuning-app-swyh8d
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it mid-publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Vite is configured with base: '' so assets resolve relatively, which is
+      # what a project page served from /<repo>/ needs.
+      - run: npm run build
+
+      - run: npm test
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
