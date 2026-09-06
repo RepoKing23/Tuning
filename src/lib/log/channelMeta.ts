@@ -61,6 +61,35 @@ export function metaFor(name: string): Meta {
   return CHANNEL_META[name] ?? { unit: '', group: 'Other' };
 }
 
+export type TempUnit = 'C' | 'F';
+
+/** Channels whose values are degrees Celsius and can be shown in Fahrenheit. */
+export const TEMPERATURE_CHANNELS = new Set([
+  'Cooltemp', 'IAT', 'MAT', 'Trans_Temp', 'OddClutchTemp', 'EvenClutchTemp',
+]);
+
+export function isTemperature(name: string): boolean {
+  return TEMPERATURE_CHANNELS.has(name);
+}
+
+/**
+ * Display a Celsius value in the chosen unit.
+ *
+ * Conversion happens at display time only. Every threshold in the analysis —
+ * the warm-engine filter, the cold-engine phantom-knock rule, the plausible
+ * ranges — stays in Celsius so there is one definition of each rather than two
+ * that can drift apart.
+ */
+export function formatTemp(celsius: number, unit: TempUnit, decimals = 0): string {
+  if (!Number.isFinite(celsius)) return '—';
+  const v = unit === 'F' ? celsius * 9 / 5 + 32 : celsius;
+  return `${v.toFixed(decimals)}°${unit}`;
+}
+
+export function toDisplayTemp(celsius: number, unit: TempUnit): number {
+  return unit === 'F' ? celsius * 9 / 5 + 32 : celsius;
+}
+
 /**
  * Whether one sample is physically believable.
  *

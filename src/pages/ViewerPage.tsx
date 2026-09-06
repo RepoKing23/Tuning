@@ -8,10 +8,13 @@ import { CellCoverage } from '../components/viewer/CellCoverage';
 import type { CoverageMode } from '../components/viewer/CellCoverage';
 import { FileBar } from '../components/FileBar';
 import { colorFor } from '../lib/log/palette';
-import { isPlausible } from '../lib/log/channelMeta';
+import { isPlausible, formatTemp, isTemperature } from '../lib/log/channelMeta';
 import { HealthSummary } from '../components/viewer/HealthSummary';
 import { LoggingAdvice } from '../components/viewer/LoggingAdvice';
 import { loggingAdvice } from '../lib/log/loggingAdvice';
+import { detectLoadScale } from '../lib/log/loadScale';
+import { getTempUnit, setTempUnit } from '../lib/log/prefs';
+import type { TempUnit } from '../lib/log/channelMeta';
 
 const DEFAULT_VISIBLE = ['RPM', 'Load', 'TimingAdv', 'MAF_Voltage'];
 
@@ -36,6 +39,7 @@ export function ViewerPage() {
   const [statChannel, setStatChannel] = useState('TimingAdv');
   const [groupScales, setGroupScales] = useState(true);
   const [hideRailed, setHideRailed] = useState(true);
+  const [tempUnit, setUnit] = useState<TempUnit>(getTempUnit);
 
   // Prefer the spark map's real axes so the coverage grid matches the table
   // you will actually be editing.
@@ -58,6 +62,14 @@ export function ViewerPage() {
 
   // Advice is drawn from every selected log, not just the one being plotted:
   // a channel that works in one profile and not another is itself the finding.
+  const loadScale = useMemo(() => {
+    const d = project.definition?.definition;
+    const rom = project.rom?.bytes;
+    if (!d || !rom || !project.identity?.matches) return null;
+    const t = d.tables.find((x) => x.name === 'AFR Map warm');
+    return t ? detectLoadScale(selected.map((l) => l.log), readTable(rom, d, t)) : null;
+  }, [project.definition, project.rom, project.identity, selected]);
+
   const advice = useMemo(
     () => loggingAdvice(selected.map(({ log, health }) => ({ log, health }))),
     [selected],
@@ -80,6 +92,7 @@ export function ViewerPage() {
               visible={visible}
               focused={focused}
               cursorRow={cursorRow}
+              tempUnit={tempUnit}
               onToggle={(name) =>
                 setVisible((v) => (v.includes(name) ? v.filter((n) => n !== name) : [...v, name]))
               }
@@ -101,6 +114,12 @@ export function ViewerPage() {
         ) : (
           <>
             <HealthSummary log={primary.log} health={primary.health} />
+            {loadScale && loadScale.factor !== 1 && (
+              <div className="notice warn">
+                <strong>Load rescaled to match the ROM</strong>
+                {loadScale.message}
+              </div>
+            )}
             <LoggingAdvice advice={advice} />
 
             <div className="chart-wrap" style={{ marginBottom: 12 }}>
@@ -120,6 +139,18 @@ export function ViewerPage() {
                     onChange={(e) => setHideRailed(e.target.checked)}
                   />
                   hide railed sensor values
+                </label>
+                <label className="row small muted" style={{ gap: 5 }}>
+                  <input
+                    type="checkbox"
+                    checked={tempUnit === 'F'}
+                    onChange={(e) => {
+                      const u: TempUnit = e.target.checked ? 'F' : 'C';
+                      setUnit(u);
+                      setTempUnit(u);
+                    }}
+                  />
+                  temperatures in °F
                 </label>
               </div>
               <LogChart
@@ -143,10 +174,16 @@ export function ViewerPage() {
                       <span className="dot" style={{ background: colorFor(name) }} />
                       {name}
                       <strong style={railed ? { color: 'var(--warn)' } : undefined}>
-                        {Number.isNaN(v) ? '—' : v.toFixed(2).replace(/\.00$/, '')}
+                        {Number.isNaN(v)
+                          ? '—'
+                          : isTemperature(name)
+                            ? formatTemp(v, tempUnit, 1)
+                            : v.toFixed(2).replace(/\.00$/, '')}
                       </strong>
                       <span className="muted">
-                        {railed ? 'railed — not a reading' : ch.unit}
+                        {railed
+                          ? 'railed — not a reading'
+                          : isTemperature(name) ? '' : ch.unit}
                       </span>
                     </span>
                   );
@@ -210,6 +247,7 @@ export function ViewerPage() {
                   statChannel={statChannel}
                   timeRange={zoom}
                   ignoreCoolant={ignoreCoolant}
+                  xScale={loadScale?.factor ?? 1}
                 />
               </div>
             </div>

@@ -16,10 +16,13 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('viewer');
   // A table the AFR diagnosis asked to open, handed to TablesPage once.
   const [pendingTable, setPendingTable] = useState<string | null>(null);
+  // On a phone the sidebar is a drawer; on desktop this class does nothing.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const closeDrawer = () => setDrawerOpen(false);
 
   return (
     <ProjectProvider>
-      <div className="app">
+      <div className={`app${drawerOpen ? ' drawer-open' : ''}`}>
         <header className="topbar">
           <h1>
             4B11 Tuner <span>· EcuFlash + EvoScan workbench</span>
@@ -29,7 +32,7 @@ export default function App() {
               <button
                 key={t.id}
                 className={tab === t.id ? 'active' : ''}
-                onClick={() => setTab(t.id)}
+                onClick={() => { setTab(t.id); closeDrawer(); }}
               >
                 {t.label}
               </button>
@@ -37,7 +40,12 @@ export default function App() {
           </nav>
           <div className="spacer" />
           <span className="muted small">Everything is parsed in this browser — nothing is uploaded</span>
+          <button className="sidebar-toggle" onClick={() => setDrawerOpen((o) => !o)}>
+            {drawerOpen ? 'Close' : 'Files & options'}
+          </button>
         </header>
+
+        <div className="scrim" onClick={closeDrawer} />
 
         {tab === 'viewer' && <ViewerPage />}
         {tab === 'tables' && (

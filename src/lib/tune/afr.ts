@@ -62,6 +62,8 @@ export interface AfrOptions {
   minSamples: number;
   /** Largest change written into the fuel map in one pass, in percent. */
   maxFuelChangePct: number;
+  /** Multiplier taking the log's Load into the ROM's Ev%. See detectLoadScale. */
+  loadScale?: number;
 }
 
 export const DEFAULT_AFR_OPTIONS: AfrOptions = {
@@ -93,7 +95,7 @@ function looksLikeNarrowband(samples: Sample[], rich: number[]): boolean {
   return settled / rich.length < 0.05 && samples.length > 100;
 }
 
-function collect(inputs: AfrLogInput[]) {
+function collect(inputs: AfrLogInput[], loadScale = 1) {
   const open: Sample[] = [];
   const closed: number[] = [];
   const richReadings: number[] = [];
@@ -128,7 +130,7 @@ function collect(inputs: AfrLogInput[]) {
       const r = rpm ? rpm.values[i] : NaN;
       const l = load ? load.values[i] : NaN;
       if (Number.isNaN(v) || Number.isNaN(r) || Number.isNaN(l)) { rejected++; continue; }
-      open.push({ errorPct, volts: v, rpm: r, load: l });
+      open.push({ errorPct, volts: v, rpm: r, load: l * loadScale });
     }
   }
   return { open, closed, richReadings, railed, rejected };
@@ -155,7 +157,7 @@ export function analyseAfr(
 
   if (inputs.length === 0) return { ...blocked('No logs selected.'), ...empty };
 
-  const { open, closed, richReadings, railed, rejected } = collect(inputs);
+  const { open, closed, richReadings, railed, rejected } = collect(inputs, options.loadScale ?? 1);
   const notes: string[] = [];
 
   if (open.length === 0 && closed.length === 0) {
@@ -354,7 +356,7 @@ export function recommendFuelMap(
     return blocked(analysis.message, analysis.notes);
   }
 
-  const { open } = collect(inputs);
+  const { open } = collect(inputs, options.loadScale ?? 1);
   const voltAxis = mafTables.flatMap((t) => t.y.values).sort((a, b) => a - b);
 
   // Rebuild the airflow component so the same subtraction is applied here as in

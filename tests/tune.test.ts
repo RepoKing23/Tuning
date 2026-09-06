@@ -10,6 +10,8 @@ import { recommendTiming } from '../src/lib/tune/timing';
 import { advanceCeiling, PROFILES, snapWindow, MIN_SAMPLES } from '../src/lib/tune/profiles';
 import { binLog, DEFAULT_FILTER } from '../src/lib/tune/binning';
 import { analyseAfr, recommendFuelMap } from '../src/lib/tune/afr';
+import { detectLoadScale } from '../src/lib/log/loadScale';
+import { analyseKnock, recommendKnockRetard, recommendNoiseFloor } from '../src/lib/tune/knock';
 import type { ProfileId } from '../src/lib/tune/profiles';
 
 const root = resolve(__dirname, '..');
@@ -531,5 +533,142 @@ describe('MAF closed-loop exclusion', () => {
     const rec = recommendMaf([{ log, health: assessChannels(log) }], tableNamed('MAF CALIBRATION Part 2  (units)'));
     expect(rec.status).toBe('ok');
     expect(rec.notes.join(' ')).toMatch(/closed-loop samples were excluded/);
+  });
+});
+
+describe('load scale', () => {
+  const afrMap = tableNamed('AFR Map warm');
+
+  it('detects that the logger reads half the ROM Ev%', () => {
+    const scale = detectLoadScale(inputs.map((i) => i.log), afrMap);
+    expect(scale.factor).toBe(2);
+    expect(scale.confidence).toBe('high');
+    // The ECU looked the target up from this map, so the right interpretation
+    // reproduces it closely and the wrong one does not.
+    expect(scale.residualAfr).toBeLessThan(0.3);
+    expect(scale.residualAtOne).toBeGreaterThan(1.0);
+  });
+
+  it('moves full-throttle samples out of the cruise columns', () => {
+    const axes = {
+      xAxis: spark.x.values, yAxis: spark.y.values,
+      xChannel: 'Load', yChannel: 'RPM', collect: [],
+      filter: DEFAULT_FILTER, ignoreCoolant: true,
+    };
+    const highestCol = (scale: number) => {
+      const b = binLog(drive1.log, { ...axes, xScale: scale });
+      let max = -1;
+      for (const row of b.cells) {
+        for (let c = 0; c < row.length; c++) if (row[c].n > 0) max = Math.max(max, c);
+      }
+      return spark.x.values[max];
+    };
+    // Uncorrected, the car appears never to leave part throttle.
+    expect(highestCol(1)).toBeLessThanOrEqual(50);
+    expect(highestCol(2)).toBeGreaterThanOrEqual(85);
+  });
+
+  it('leaves the scale alone when there is nothing to check against', () => {
+    const header = 'LogEntrySeconds,RPM,Load,Target_AFR\n';
+    const rows = Array.from({ length: 20 }, (_, i) => `${i * 0.1},2000,30,14.7`);
+    const log = parseEvoScanCsv(header + rows.join('\n'), 'flat.csv');
+    const scale = detectLoadScale([log], afrMap);
+    expect(scale.factor).toBe(1);
+    expect(scale.message).toMatch(/too few|flat at stoich/);
+  });
+
+  it('changes what the timing recommender produces', () => {
+    const at = (loadScale: number) =>
+      recommendTiming(inputs, spark, {
+        profile: 'power', minSamples: 4, intensity: 1, timeRange: null, loadScale,
+      });
+    // The whole point of the fix: the same log lands on different cells.
+    const keys = (r: ReturnType<typeof at>) => [...r.suggestions.keys()].sort().join('|');
+    expect(keys(at(2))).not.toBe(keys(at(1)));
+  });
+});
+
+describe('knock assistant', () => {
+  const threshold = tableNamed('Knock Control, Active Load Threshold');
+  const opts = { loadScale: 2, activeLoadThreshold: threshold, maxRetardDeg: 6 };
+  const withIdle = [
+    ...inputs,
+    (() => {
+      const log = parseEvoScanCsv(
+        readFileSync(resolve(root, 'samples/log-idle-2026.09.02_13.54.34.csv'), 'utf8'),
+        'idle.csv',
+      );
+      return { log, health: assessChannels(log) };
+    })(),
+  ];
+
+  it('judges these events real, at genuine high load', () => {
+    const a = analyseKnock(withIdle, opts);
+    expect(a.status).toBe('ok');
+    expect(a.events.length).toBeGreaterThan(30);
+    expect(a.realCount).toBeGreaterThan(a.phantomCount * 5);
+    // With load corrected these sit well above the ECU's own 50-70 Ev% threshold.
+    const realLoads = a.events.filter((e) => e.verdict === 'real').map((e) => e.load);
+    expect(Math.min(...realLoads)).toBeGreaterThan(30);
+    expect(Math.max(...realLoads)).toBeGreaterThan(70);
+  });
+
+  it('would call the same events phantom if load were left uncorrected', () => {
+    // Evidence that the load fix is load-bearing for the verdict, not cosmetic.
+    const uncorrected = analyseKnock(withIdle, { ...opts, loadScale: 1 });
+    const corrected = analyseKnock(withIdle, opts);
+    expect(uncorrected.phantomCount).toBeGreaterThan(corrected.phantomCount);
+  });
+
+  it('calls knock at idle phantom', () => {
+    const header = 'LogEntrySeconds,RPM,Load,TPS,TimingAdv,Cooltemp,KnockSum,Knock_change\n';
+    const rows: string[] = [];
+    let ks = 0;
+    for (let i = 0; i < 300; i++) {
+      if (i % 40 === 0) ks += 1;
+      rows.push(`${(i * 0.1).toFixed(3)},${800 + (i % 5) * 10},${4 + (i % 3)},8,${12 + (i % 4)},88,${ks},3`);
+    }
+    const log = parseEvoScanCsv(header + rows.join('\n'), 'idleknock.csv');
+    const a = analyseKnock([{ log, health: assessChannels(log) }], { ...opts, loadScale: 1 });
+    expect(a.phantomCount).toBeGreaterThan(0);
+    expect(a.realCount).toBe(0);
+    const reasons = a.events.flatMap((e) => e.reasons).join(' ');
+    expect(reasons).toMatch(/cylinder pressure|throttle nearly closed/);
+  });
+
+  it('spots a single rpm ringing across wildly different loads', () => {
+    const header = 'LogEntrySeconds,RPM,Load,TPS,TimingAdv,Cooltemp,KnockSum,Knock_change\n';
+    const rows: string[] = [];
+    let ks = 0;
+    for (let i = 0; i < 400; i++) {
+      const knocking = i % 30 === 0;
+      if (knocking) ks += 1;
+      // Always ~4000 rpm, but load swings from 10 to 95: a resonance, not combustion.
+      const load = knocking ? 10 + (i / 400) * 85 : 40;
+      rows.push(`${(i * 0.1).toFixed(3)},${3980 + (i % 5) * 5},${load.toFixed(1)},60,20,88,${ks},4`);
+    }
+    const log = parseEvoScanCsv(header + rows.join('\n'), 'resonance.csv');
+    const a = analyseKnock([{ log, health: assessChannels(log) }], { ...opts, loadScale: 1 });
+    expect(a.phantomCount).toBeGreaterThan(0);
+    expect(a.events.flatMap((e) => e.reasons).join(' ')).toMatch(/resonance/);
+  });
+
+  it('retards only the cells where knock is real', () => {
+    const rec = recommendKnockRetard(withIdle, spark, opts);
+    expect(rec.status).toBe('ok');
+    expect(rec.suggestions.size).toBeGreaterThan(0);
+    for (const s of rec.suggestions.values()) {
+      expect(s.delta).toBeLessThan(0);
+      expect(-s.delta).toBeLessThanOrEqual(opts.maxRetardDeg);
+      expect(s.knock).toBeGreaterThan(0);
+    }
+  });
+
+  it('refuses to raise the noise floor on scattered one-off events', () => {
+    // Making the ECU less sensitive to knock needs a pattern, not a single tick.
+    const adder = tableNamed('Knock Sensitivity, Background Noise Adder (Single Gain #1)');
+    const rec = recommendNoiseFloor(withIdle, adder, opts);
+    expect(rec.status).toBe('blocked');
+    expect(rec.message).toMatch(/scattered rather than clustered/);
   });
 });

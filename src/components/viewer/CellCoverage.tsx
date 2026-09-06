@@ -21,6 +21,8 @@ export interface CellCoverageProps {
   timeRange?: [number, number] | null;
   filter?: SampleFilter;
   ignoreCoolant?: boolean;
+  /** Multiplier taking the log's X channel into the ROM axis's units. */
+  xScale?: number;
 }
 
 /**
@@ -33,7 +35,7 @@ export interface CellCoverageProps {
  */
 export function CellCoverage({
   logs, xAxis, yAxis, xLabel, yLabel, xChannel, yChannel,
-  mode, statChannel, timeRange, filter, ignoreCoolant,
+  mode, statChannel, timeRange, filter, ignoreCoolant, xScale = 1,
 }: CellCoverageProps) {
   const { grid, maxValue, minValue, totalUsed, rejected } = useMemo(() => {
     const effectiveFilter = filter ?? (mode === 'knock' ? OVERRUN_FILTER : DEFAULT_FILTER);
@@ -50,6 +52,7 @@ export function CellCoverage({
         filter: effectiveFilter,
         timeRange,
         ignoreCoolant,
+        xScale,
       });
       used += binned.used;
       for (const [why, n] of Object.entries(binned.rejected)) rej[why] = (rej[why] ?? 0) + n;
@@ -85,7 +88,7 @@ export function CellCoverage({
     );
 
     return { grid: g, maxValue: hi, minValue: lo, totalUsed: used, rejected: rej };
-  }, [logs, xAxis, yAxis, xChannel, yChannel, mode, statChannel, timeRange, filter, ignoreCoolant]);
+  }, [logs, xAxis, yAxis, xChannel, yChannel, mode, statChannel, timeRange, filter, ignoreCoolant, xScale]);
 
   const span = maxValue - minValue;
   const label =

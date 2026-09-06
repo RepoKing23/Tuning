@@ -24,6 +24,8 @@ export interface TimingOptions {
   intensity: number;
   /** Restrict analysis to a time window. */
   timeRange?: [number, number] | null;
+  /** Multiplier taking the log's Load into the ROM's Ev%. See detectLoadScale. */
+  loadScale?: number;
   /**
    * Which cells the overrun profiles retard. Defaults to the profile's own
    * starting window when omitted.
@@ -111,6 +113,7 @@ export function recommendTiming(
       filter,
       timeRange: options.timeRange,
       ignoreCoolant: health.get('Cooltemp')?.status !== 'ok',
+      xScale: options.loadScale ?? 1,
     });
     totalUsed += binned.used;
     merged = merged

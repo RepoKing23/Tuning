@@ -1,6 +1,8 @@
 import type { ChannelHealth } from '../../lib/log/channelHealth';
 import type { ChannelGroup, LogFile } from '../../lib/log/types';
 import { colorFor } from '../../lib/log/palette';
+import { formatTemp, isTemperature } from '../../lib/log/channelMeta';
+import type { TempUnit } from '../../lib/log/channelMeta';
 
 const GROUP_ORDER: ChannelGroup[] = ['Engine', 'Airflow', 'Fuel', 'Spark', 'Temps', 'Trans', 'Other'];
 
@@ -10,24 +12,28 @@ export interface ChannelPanelProps {
   visible: string[];
   focused: string | null;
   cursorRow: number | null;
+  tempUnit: TempUnit;
   onToggle(name: string): void;
   onFocus(name: string): void;
   onSetVisible(names: string[]): void;
 }
 
 export function ChannelPanel({
-  log, health, visible, focused, cursorRow, onToggle, onFocus, onSetVisible,
+  log, health, visible, focused, cursorRow, tempUnit, onToggle, onFocus, onSetVisible,
 }: ChannelPanelProps) {
   const shown = new Set(visible);
 
   const valueAt = (name: string): string => {
     const ch = log.byName.get(name);
     if (!ch) return '';
+    const temp = isTemperature(name);
     if (cursorRow === null || cursorRow < 0 || cursorRow >= ch.values.length) {
-      return Number.isFinite(ch.mean) ? `x̄ ${ch.mean.toFixed(1)}` : '—';
+      if (!Number.isFinite(ch.mean)) return '—';
+      return temp ? `x̄ ${formatTemp(ch.mean, tempUnit)}` : `x̄ ${ch.mean.toFixed(1)}`;
     }
     const v = ch.values[cursorRow];
-    return Number.isNaN(v) ? '—' : v.toFixed(2).replace(/\.00$/, '');
+    if (Number.isNaN(v)) return '—';
+    return temp ? formatTemp(v, tempUnit) : v.toFixed(2).replace(/\.00$/, '');
   };
 
   const healthyNames = log.channels

@@ -105,6 +105,14 @@ export interface BinOptions {
   timeRange?: [number, number] | null;
   /** Skip the coolant filter when the ECT channel is known to be unreliable. */
   ignoreCoolant?: boolean;
+  /**
+   * Multiplier taking the log's X channel into the ROM axis's units. Needed when
+   * the logger profile and the definition disagree about load scaling — see
+   * `detectLoadScale`. Without it, full-throttle samples bin as cruise.
+   */
+  xScale?: number;
+  /** Same for the Y channel. */
+  yScale?: number;
 }
 
 export function binLog(log: LogFile, opts: BinOptions): BinnedTable {
@@ -177,8 +185,8 @@ export function binLog(log: LogFile, opts: BinOptions): BinnedTable {
     }
     if (filter.excludeOverrun && isOverrun) { reject('overrun / decel fuel cut'); continue; }
 
-    const xv = xCh.values[i];
-    const yv = yCh.values[i];
+    const xv = xCh.values[i] * (opts.xScale ?? 1);
+    const yv = yCh.values[i] * (opts.yScale ?? 1);
     if (Number.isNaN(xv) || Number.isNaN(yv)) { reject('no position'); continue; }
 
     const col = nearestIndex(xAxis, xv);

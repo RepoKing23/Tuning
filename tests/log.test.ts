@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseEvoScanCsv } from '../src/lib/log/parseEvoScanCsv';
 import { assessChannels, fuelFeedback } from '../src/lib/log/channelHealth';
-import { isPlausible } from '../src/lib/log/channelMeta';
+import { isPlausible, formatTemp, isTemperature, toDisplayTemp } from '../src/lib/log/channelMeta';
 import { loggingAdvice } from '../src/lib/log/loggingAdvice';
 
 const root = resolve(__dirname, '..');
@@ -218,5 +218,23 @@ describe('logging setup advice', () => {
       `${(4 + (i % 5) * 0.4).toFixed(2)},${(86 + (i % 7) * 0.5).toFixed(1)},0`);
     const good = parseEvoScanCsv(header + rows.join('\n'), 'good.csv');
     expect(loggingAdvice([withHealth(good)])).toHaveLength(0);
+  });
+});
+
+describe('temperature units', () => {
+  it('converts for display without touching the underlying value', () => {
+    expect(formatTemp(0, 'C')).toBe('0°C');
+    expect(formatTemp(0, 'F')).toBe('32°F');
+    expect(formatTemp(100, 'F')).toBe('212°F');
+    expect(formatTemp(88, 'F')).toBe('190°F');
+    expect(formatTemp(NaN, 'F')).toBe('—');
+    expect(toDisplayTemp(-40, 'F')).toBe(-40);
+  });
+
+  it('knows which channels are temperatures', () => {
+    expect(isTemperature('Cooltemp')).toBe(true);
+    expect(isTemperature('IAT')).toBe(true);
+    expect(isTemperature('RPM')).toBe(false);
+    expect(isTemperature('WideBandAF')).toBe(false);
   });
 });

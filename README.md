@@ -10,7 +10,7 @@ never uploaded anywhere.
 ```bash
 npm install
 npm run dev      # http://localhost:5173
-npm test         # 66 tests against the real sample files
+npm test         # 78 tests against the real sample files
 npm run build    # static site in dist/
 ```
 
@@ -94,6 +94,22 @@ and airflow are strongly correlated on a naturally aspirated engine:
 
 Each cause is ranked by size and carries an **Open this table** button.
 
+**Knock** separates real knock from the sensor mishearing mechanical noise,
+because the two need opposite fixes. Real knock is combustion going wrong and the
+answer is less timing where it happens; phantom knock is piston slap, injectors,
+valvetrain or a loose heat shield, and the answer is the knock-sensitivity tables
+at the offending rpm. Retarding timing to chase noise costs power and leaves the
+noise still triggering; raising the noise floor to silence real knock removes the
+only warning the engine gives before it damages itself.
+
+Each event is judged on load and throttle (knock needs cylinder pressure),
+`Knock_change` signal strength, whether it clusters into bursts, whether one rpm
+keeps triggering across wildly different loads (a resonance), engine temperature,
+and the ROM's own `Knock Control, Active Load Threshold`. The verdict and its
+reasoning are shown per event, and each fix routes to the table that performs it.
+Raising the noise floor needs a pattern — three or more phantom events at one rpm
+— because every step traded there is knock sensitivity given up everywhere.
+
 **Timing advance** works cell by cell on the spark map under one of four
 profiles:
 
@@ -147,6 +163,21 @@ key and it will explain the computed suggestions in plain English and answer
 follow-up questions. The key is stored in your browser only, and the request
 carries the computed summary and changed cells — never your ROM.
 
+## Load scale
+
+A logger profile and a ROM definition can disagree about how a raw load value
+becomes Ev% — this definition alone carries scalings differing by exactly two.
+When they disagree every cell attribution silently lands in the wrong column,
+with full-throttle samples filed under cruise, while every number on screen still
+looks reasonable.
+
+The ECU settles it. Commanded AFR is looked up from the ROM's own AFR map at the
+true rpm and load, so the interpretation that best reproduces the logged
+`Target_AFR` from that map is the correct one. The app derives the factor that
+way, reports it, and applies it everywhere log load meets a ROM axis. On the
+supplied logs it finds ×2: 0.08 AFR of disagreement corrected against 1.84
+untouched.
+
 ## Datalog health
 
 Bad channels do not announce themselves. A coolant sensor stuck at -13 °C
@@ -182,7 +213,7 @@ src/lib/ai/      optional Claude explanation layer
 src/components/  viewer, table and tuning UI
 src/pages/       the three tabs
 samples/         the ROM, definition and logs the tests run against
-tests/           66 tests, all against those real files
+tests/           78 tests, all against those real files
 ```
 
 ## Notes on the defaults

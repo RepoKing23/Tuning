@@ -16,8 +16,12 @@ import { binLog, DEFAULT_FILTER } from '../lib/tune/binning';
 import { blocked } from '../lib/tune/types';
 import { analyseAfr, recommendFuelMap, DEFAULT_AFR_OPTIONS } from '../lib/tune/afr';
 import { AfrDiagnosis } from '../components/tune/AfrDiagnosis';
+import { KnockAssistant } from '../components/tune/KnockAssistant';
+import { analyseKnock, recommendKnockRetard, recommendNoiseFloor } from '../lib/tune/knock';
+import { detectLoadScale } from '../lib/log/loadScale';
+import { getTempUnit } from '../lib/log/prefs';
 
-type Target = 'maf' | 'timing' | 'afr';
+type Target = 'maf' | 'timing' | 'afr' | 'knock';
 
 const MAF_PARTS = [
   'MAF CALIBRATION Part 1  (units)',
@@ -31,6 +35,14 @@ export interface TunePageProps {
 }
 
 const FUEL_MAP = 'Fuel Calibration Map';
+const AFR_MAP = 'AFR Map warm';
+const KNOCK_THRESHOLD = 'Knock Control, Active Load Threshold';
+const NOISE_TABLES = [
+  'Knock Sensitivity, Background Noise Adder (Single Gain #1)',
+  'Knock Sensitivity, Background Noise Adder (Single Gain #2)',
+  'Knock Sensitivity, Background Noise Adder (Triple Gain #1)',
+  'Knock Sensitivity, Background Noise Adder (Triple Gain #2)',
+];
 
 export function TunePage({ onOpenTable }: TunePageProps = {}) {
   const project = useProject();
@@ -44,6 +56,9 @@ export function TunePage({ onOpenTable }: TunePageProps = {}) {
   const [sparkTableName, setSparkTableName] = useState('High Octane Spark Map');
   const [showSuggestions, setShowSuggestions] = useState(true);
   const [overrunWindow, setOverrunWindow] = useState<OverrunWindow | null>(null);
+  const [knockMode, setKnockMode] = useState<'retard' | 'noiseFloor'>('retard');
+  const [noiseTable, setNoiseTable] = useState(NOISE_TABLES[0]);
+  const tempUnit = getTempUnit();
 
   const def = project.definition?.definition ?? null;
   const rom = project.rom?.bytes ?? null;
@@ -56,10 +71,32 @@ export function TunePage({ onOpenTable }: TunePageProps = {}) {
 
   const table: TableData | null = useMemo(() => {
     if (!ready || !def || !rom) return null;
-    const name = target === 'maf' ? mafPart : target === 'afr' ? FUEL_MAP : sparkTableName;
+    const name =
+      target === 'maf' ? mafPart
+      : target === 'afr' ? FUEL_MAP
+      : target === 'knock' ? (knockMode === 'noiseFloor' ? noiseTable : sparkTableName)
+      : sparkTableName;
     const found = def.tables.find((t) => t.name === name);
     return found ? readTable(rom, def, found) : null;
-  }, [ready, def, rom, target, mafPart, sparkTableName]);
+  }, [ready, def, rom, target, mafPart, sparkTableName, knockMode, noiseTable]);
+
+  const tableByName = useMemo(() => {
+    if (!ready || !def || !rom) return () => null;
+    return (name: string) => {
+      const t = def.tables.find((x) => x.name === name);
+      return t ? readTable(rom, def, t) : null;
+    };
+  }, [ready, def, rom]);
+
+  /**
+   * The logger and the definition can disagree about load scaling, and when
+   * they do every cell attribution lands in the wrong column. Derived once here
+   * and threaded through every analysis.
+   */
+  const loadScale = useMemo(
+    () => detectLoadScale(logs.map((l) => l.log), tableByName(AFR_MAP)),
+    [logs, tableByName],
+  );
 
   const mafTables = useMemo(() => {
     if (!ready || !def || !rom) return [];
@@ -69,15 +106,26 @@ export function TunePage({ onOpenTable }: TunePageProps = {}) {
       .map((t) => readTable(rom, def, t));
   }, [ready, def, rom]);
 
+  const knockOptions = useMemo(() => ({
+    loadScale: loadScale.factor,
+    activeLoadThreshold: tableByName(KNOCK_THRESHOLD),
+    maxRetardDeg: 6,
+  }), [loadScale, tableByName]);
+
+  const knockAnalysis = useMemo(() => {
+    if (target !== 'knock' || logs.length === 0) return null;
+    return analyseKnock(logs.map(({ log, health }) => ({ log, health })), knockOptions);
+  }, [target, logs, knockOptions]);
+
   const afrAnalysis = useMemo(() => {
     if (target !== 'afr' || !table || logs.length === 0) return null;
     return analyseAfr(
       logs.map(({ log, health }) => ({ log, health })),
       mafTables,
       table,
-      { ...DEFAULT_AFR_OPTIONS, minSamples },
+      { ...DEFAULT_AFR_OPTIONS, minSamples, loadScale: loadScale.factor },
     );
-  }, [target, table, logs, mafTables, minSamples]);
+  }, [target, table, logs, mafTables, minSamples, loadScale]);
 
   const recommendation = useMemo(() => {
     if (!table) return blocked('Load a ROM, its definition and a datalog to get suggestions.');
@@ -85,12 +133,21 @@ export function TunePage({ onOpenTable }: TunePageProps = {}) {
     const inputs = logs.map(({ log, health }) => ({ log, health }));
     if (target === 'maf') return recommendMaf(inputs, table, { ...DEFAULT_MAF_OPTIONS, minSamples });
     if (target === 'afr') {
-      return recommendFuelMap(inputs, mafTables, table, { ...DEFAULT_AFR_OPTIONS, minSamples });
+      return recommendFuelMap(inputs, mafTables, table, {
+        ...DEFAULT_AFR_OPTIONS, minSamples, loadScale: loadScale.factor,
+      });
+    }
+    if (target === 'knock') {
+      return knockMode === 'noiseFloor'
+        ? recommendNoiseFloor(inputs, table, knockOptions)
+        : recommendKnockRetard(inputs, table, knockOptions);
     }
     return recommendTiming(inputs, table, {
       profile, minSamples, intensity, timeRange: null, overrunWindow,
+      loadScale: loadScale.factor,
     });
-  }, [table, logs, target, profile, intensity, minSamples, overrunWindow, mafTables]);
+  }, [table, logs, target, profile, intensity, minSamples, overrunWindow, mafTables,
+      loadScale, knockMode, knockOptions]);
 
   const healthNotes = useMemo(
     () =>
@@ -116,6 +173,7 @@ export function TunePage({ onOpenTable }: TunePageProps = {}) {
         yChannel: 'RPM',
         collect: [],
         filter: DEFAULT_FILTER,
+        xScale: loadScale.factor,
         ignoreCoolant: health.get('Cooltemp')?.status !== 'ok',
       });
       for (let r = 0; r < counts.length; r++) {
@@ -151,9 +209,17 @@ export function TunePage({ onOpenTable }: TunePageProps = {}) {
             <button className={target === 'afr' ? 'primary' : ''} onClick={() => setTarget('afr')}>
               AFR / fuelling
             </button>
+            <button className={target === 'knock' ? 'primary' : ''} onClick={() => setTarget('knock')}>
+              Knock
+            </button>
           </div>
 
-          {target === 'afr' ? (
+          {target === 'knock' ? (
+            <div className="muted small">
+              Separates real knock from the sensor mishearing mechanical noise, then routes each
+              to the table that actually fixes it.
+            </div>
+          ) : target === 'afr' ? (
             <div className="muted small">
               Compares your wideband against the ECU's own commanded target, works out which
               table is responsible, and writes the operating-point part into the{' '}
@@ -255,6 +321,26 @@ export function TunePage({ onOpenTable }: TunePageProps = {}) {
           </div>
         ) : (
           <>
+            {loadScale.factor !== 1 && (
+              <div className="notice warn">
+                <strong>Load rescaled to match the ROM</strong>
+                {loadScale.message}
+              </div>
+            )}
+
+            {target === 'knock' && knockAnalysis && (
+              <KnockAssistant
+                analysis={knockAnalysis}
+                tempUnit={tempUnit}
+                mode={knockMode}
+                onModeChange={setKnockMode}
+                onOpenTable={(n) => onOpenTable?.(n)}
+                noiseTables={NOISE_TABLES}
+                noiseTable={noiseTable}
+                onNoiseTableChange={setNoiseTable}
+              />
+            )}
+
             {target === 'afr' && afrAnalysis && (
               <AfrDiagnosis
                 analysis={afrAnalysis}
