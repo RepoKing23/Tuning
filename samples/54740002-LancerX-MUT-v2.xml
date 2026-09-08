@@ -318,6 +318,8 @@
 		<table name="RPM" address="5c3fc" type="Y Axis" elements="16" scaling="RPM"/>
 	</table>
 
+	<table name="Injector Scaling" category="FUEL" address="512c2" type="1D" scaling="Injector_29241"/>
+
 	<table name="Limp mode AFR Map" category="FUEL" address="5abef" type="3D" swapxy="true" scaling="AFR">
 		<table name="Load" address="5bc4c" type="X Axis" elements="13" scaling="Load"/>
 		<table name="RPM" address="5bc2a" type="Y Axis" elements="14" scaling="RPM"/>
