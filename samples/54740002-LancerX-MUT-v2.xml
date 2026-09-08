@@ -273,6 +273,8 @@
 
 	<table name="Stationary Rev Limit - RPM" category="Limits" address="51634" type="1D" scaling="RPMStatLimit"/>
 
+	<table name="Moving Rev Limiter" category="Limits" address="5125c" type="1D" scaling="RPMLimit"/>
+
 	<table name="AFR Map warm" category="FUEL" address="53027" type="3D" swapxy="true" scaling="AFR">
 		<table name="Load" address="5bc4c" type="X Axis" elements="13" scaling="Load"/>
 		<table name="RPM" address="5bc2a" type="Y Axis" elements="14" scaling="RPM"/>
