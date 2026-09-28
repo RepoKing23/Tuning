@@ -3,13 +3,15 @@ import { ProjectProvider } from './state/ProjectProvider';
 import { ViewerPage } from './pages/ViewerPage';
 import { TablesPage } from './pages/TablesPage';
 import { TunePage } from './pages/TunePage';
+import { DynoPage } from './pages/DynoPage';
 
-type Tab = 'viewer' | 'tables' | 'tune';
+type Tab = 'viewer' | 'tables' | 'tune' | 'dyno';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'viewer', label: 'Log Viewer' },
   { id: 'tables', label: 'ROM Tables' },
   { id: 'tune', label: 'AI Tuning' },
+  { id: 'dyno', label: 'Dyno' },
 ];
 
 export default function App() {
@@ -48,6 +50,7 @@ export default function App() {
         <div className="scrim" onClick={closeDrawer} />
 
         {tab === 'viewer' && <ViewerPage />}
+        {tab === 'dyno' && <DynoPage />}
         {tab === 'tables' && (
           <TablesPage pendingTable={pendingTable} onConsumePending={() => setPendingTable(null)} />
         )}
