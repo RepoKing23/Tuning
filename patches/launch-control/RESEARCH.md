@@ -113,18 +113,30 @@ Next steps:
 
 ## Open item 2: cruise button input
 
-- **Confirmed:** `ECU Options Set #3` (`0x50092`) = `0xA718`, and bit 14 (labelled
-  CRUISE CONTROL) is **0**. `0x10CF4` reads this word.
+- **Confirmed:** `ECU Options Set #3` (`0x50092`) = `0xA718`, so bit 14 (labelled
+  CRUISE CONTROL) is 0 in the ROM. **This is only a default.** The code at
+  `0x10CF4–0x10D98` puts the value the ECU actually uses in RAM `0x80878C`:
+  - It picks one of 8 copies of the word by variant index `0x808798`. All 8 copies
+    are identical in this ROM.
+  - `0x5038E` = 1, so the word is then adjusted from the car's variant coding
+    (`0x804EDC–0x804EE8`).
+  - Coding values 12–17 at `0x804EE8`, or bit 7 of `0x804EE6`, turn on bit 14
+    (`or3 r0,r0,#0x4000`).
+  - The cruise enable therefore comes from how the car is coded, not from this bit.
+    The table in the definition reads the ROM correctly, but it doesn't show the
+    runtime state.
+- **Confirmed:** `ECU Options Set #2` bit 10, "Cruise Control IGN RETARD", is 1, which
+  is enabled. The `Spark Retard Cruise Control ON` map (`0x581AB`) is in use.
 - The Mitsubishi cruise switch is a resistor ladder into one A/D channel. Each button
   (ON/OFF, CANCEL, SET-, RES+) gives a distinct voltage.
 
 Next steps:
 
-1. On the car, repoint spare MUT entries to candidate A/D result RAM. Then log in
-   EvoScan while pressing each button, which identifies the variable and the voltage
-   window for each button.
-2. If no channel moves with bit 14 = 0, try with bit 14 = 1. Flipping the bit only
-   enables Mitsubishi's own cruise logic, so it is safe to test parked.
+1. Repoint a spare MUT entry to `0x80878C`/`0x80878D` and log it. Bit 14 set means
+   the ECU has cruise enabled at runtime. Leave the ROM bit as it is.
+2. Repoint spare MUT entries to candidate A/D result RAM, then log in EvoScan while
+   pressing each button. This identifies the variable and the voltage window for each
+   button.
 3. If the switch isn't wired to the ECU on this car, wire a momentary button to a spare
    analog input instead.
 
@@ -154,3 +166,13 @@ already includes it:
 ```xml
 <scaling name="RPMStatLimit" units="RPM" toexpr="x*31.25" frexpr="x/31.25" format="%.0f" min="0" max="9000" inc="31.25" storagetype="uint16" endian="big"/>
 ```
+
+`54740002-2011-5MT-Lancer-X_-_MUT_update_v2-launch.xml` in this folder is the uploaded
+definition with three changes:
+- the RPMStatLimit fix above;
+- three new scalings for the launch tables;
+- a **Launch Control (INACTIVE - needs code patch)** category, with six 1D tables in
+  empty flash at `0xA2F00–0xA2F0B`.
+
+No stock code reads those addresses, so the launch tables do nothing until the code
+patch is flashed. On a stock bin they read as `0xFF` (nonsense values).
