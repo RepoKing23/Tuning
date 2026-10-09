@@ -142,9 +142,12 @@ export function TunePage({ onOpenTable }: TunePageProps = {}) {
       logs.map(({ log, health }) => ({ log, health })),
       mafTables,
       table,
-      { ...DEFAULT_AFR_OPTIONS, minSamples, loadScale: loadScale.factor },
+      {
+        ...DEFAULT_AFR_OPTIONS, minSamples, loadScale: loadScale.factor,
+        injectorTable: tableByName('Injector Scaling'),
+      },
     );
-  }, [target, table, logs, mafTables, minSamples, loadScale]);
+  }, [target, table, logs, mafTables, minSamples, loadScale, tableByName]);
 
   const recommendation = useMemo(() => {
     if (!table) return blocked('Load a ROM, its definition and a datalog to get suggestions.');
@@ -154,6 +157,7 @@ export function TunePage({ onOpenTable }: TunePageProps = {}) {
     if (target === 'afr') {
       return recommendFuelMap(inputs, mafTables, table, {
         ...DEFAULT_AFR_OPTIONS, minSamples, loadScale: loadScale.factor,
+        injectorTable: tableByName('Injector Scaling'),
       });
     }
     if (target === 'knock') {
@@ -166,7 +170,7 @@ export function TunePage({ onOpenTable }: TunePageProps = {}) {
       loadScale: loadScale.factor,
     });
   }, [table, logs, target, profile, intensity, minSamples, overrunWindow, mafTables,
-      loadScale, knockMode, knockOptions]);
+      loadScale, knockMode, knockOptions, tableByName]);
 
   const overrunActive = target === 'timing' && PROFILES[profile].overrun;
   const effectiveWindow = overrunWindow ?? PROFILES[profile].defaultWindow ?? null;

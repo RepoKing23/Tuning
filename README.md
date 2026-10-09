@@ -10,7 +10,7 @@ never uploaded anywhere.
 ```bash
 npm install
 npm run dev      # http://localhost:5173
-npm test         # 97 tests against the real sample files
+npm test         # 100 tests against the real sample files
 npm run build    # static site in dist/
 ```
 
@@ -89,8 +89,21 @@ and airflow are strongly correlated on a naturally aspirated engine:
 1. The part that tracks sensor voltage → the MAF calibration tables.
 2. The residual that varies by rpm and load → the Fuel Calibration Map.
 3. A flat offset that survives both → injectors, fuel pressure or a global MAF
-   gain. No table fixes that, so it is named as a finding rather than smeared
-   into a map.
+   gain. It is never smeared into a map. When the definition has an `Injector
+   Scaling` table the corrected value is worked out (lean → a smaller cc/min
+   figure, so the ECU injects longer); fuel pressure should be ruled out first.
+
+Lift-offs are excluded: on a closed throttle the injectors are cut or ramping
+and the wideband is reading a transient, so it is not fuelling evidence. And a
+fuel-map cell is never moved against what it actually measures — if its
+correction would lean out a cell that is still running lean (because it assumes
+the injector offset is already fixed), the cell is held until the offset is
+fixed and a new log says otherwise.
+
+The AFR map itself is the *target* — what mixture you are asking for — and is
+deliberately not used to correct error. Moving the target to hide an error only
+moves the goalposts, and in closed loop the ECU ignores it anyway. It changes
+only when you want a different mixture, as the overrun profiles do.
 
 Each cause is ranked by size and carries an **Open this table** button.
 
@@ -247,7 +260,7 @@ src/lib/ai/      optional Claude explanation layer
 src/components/  viewer, table and tuning UI
 src/pages/       the four tabs
 samples/         the ROM, definition and logs the tests run against
-tests/           97 tests, against those real files and synthetic pulls
+tests/           100 tests, against those real files and synthetic pulls
 ```
 
 ## Notes on the defaults
