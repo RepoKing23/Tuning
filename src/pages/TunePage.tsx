@@ -19,6 +19,7 @@ import { AfrDiagnosis } from '../components/tune/AfrDiagnosis';
 import { KnockAssistant } from '../components/tune/KnockAssistant';
 import { analyseKnock, recommendKnockRetard, recommendNoiseFloor } from '../lib/tune/knock';
 import { detectLoadScale } from '../lib/log/loadScale';
+import { analyseOverrun, recommendOverrunAfr } from '../lib/tune/overrun';
 import { getTempUnit } from '../lib/log/prefs';
 
 type Target = 'maf' | 'timing' | 'afr' | 'knock';
@@ -106,6 +107,24 @@ export function TunePage({ onOpenTable }: TunePageProps = {}) {
       .map((t) => readTable(rom, def, t));
   }, [ready, def, rom]);
 
+  /**
+   * The ROM carries more than one copy of the warm AFR map, and which one the
+   * ECU reads is not documented, so overrun enrichment goes into every copy.
+   */
+  const afrWarmTables = useMemo(() => {
+    if (!ready || !def || !rom) return [];
+    return def.tables.filter((t) => t.name === AFR_MAP).map((t) => readTable(rom, def, t));
+  }, [ready, def, rom]);
+
+  /** Fuel-cut tables the overrun profiles leave to the tuner, for context. */
+  const fuelCutTables = useMemo(() => {
+    if (!ready || !def || !rom) return [];
+    const categories = new Set(
+      OVERRUN_TABLE_HINTS.filter((h) => !h.tableName).map((h) => h.category),
+    );
+    return def.tables.filter((t) => categories.has(t.category)).map((t) => readTable(rom, def, t));
+  }, [ready, def, rom]);
+
   const knockOptions = useMemo(() => ({
     loadScale: loadScale.factor,
     activeLoadThreshold: tableByName(KNOCK_THRESHOLD),
@@ -148,6 +167,36 @@ export function TunePage({ onOpenTable }: TunePageProps = {}) {
     });
   }, [table, logs, target, profile, intensity, minSamples, overrunWindow, mafTables,
       loadScale, knockMode, knockOptions]);
+
+  const overrunActive = target === 'timing' && PROFILES[profile].overrun;
+  const effectiveWindow = overrunWindow ?? PROFILES[profile].defaultWindow ?? null;
+
+  // Overrun is three levers — spark, AFR and fuel cut — so an overrun profile
+  // re-analyses all of them together rather than the spark map alone.
+  const overrunAfr = useMemo(() => {
+    if (!overrunActive || afrWarmTables.length === 0) return null;
+    return recommendOverrunAfr(
+      logs.map(({ log, health }) => ({ log, health })),
+      afrWarmTables[0],
+      { profile, intensity, overrunWindow: effectiveWindow, loadScale: loadScale.factor, minSamples },
+    );
+  }, [overrunActive, afrWarmTables, logs, profile, intensity, effectiveWindow, loadScale, minSamples]);
+
+  const overrunEvidence = useMemo(() => {
+    if (!overrunActive || logs.length === 0) return null;
+    return analyseOverrun(logs.map(({ log, health }) => ({ log, health })), { profile, intensity });
+  }, [overrunActive, logs, profile, intensity]);
+
+  const applyOverrunAfr = (onlyConfident: boolean) => {
+    if (!overrunAfr) return;
+    for (const t of afrWarmTables) {
+      for (const [key, s] of overrunAfr.suggestions) {
+        if (onlyConfident && s.confidence < 0.5) continue;
+        const [r, c] = key.split(',').map(Number);
+        project.setEdit(t.def.id, r, c, s.value);
+      }
+    }
+  };
 
   const healthNotes = useMemo(
     () =>
@@ -440,19 +489,102 @@ export function TunePage({ onOpenTable }: TunePageProps = {}) {
                   />
                 </div>
 
+                {overrunActive && overrunEvidence && (
+                  <div className={`notice ${overrunEvidence.fuelCutBlocking ? 'bad' : 'info'}`}>
+                    <strong>
+                      {overrunEvidence.fuelCutBlocking
+                        ? 'Your logs show fuel cut on the overrun'
+                        : 'What your logs show on the overrun'}
+                    </strong>
+                    {overrunEvidence.overrunSamples.toLocaleString()} closed-throttle deceleration
+                    samples analysed.
+                    {overrunEvidence.notes.length > 0 && (
+                      <ul>{overrunEvidence.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
+                    )}
+                  </div>
+                )}
+
+                {overrunActive && overrunAfr && afrWarmTables[0] && (() => {
+                  const afrTable = afrWarmTables[0];
+                  const afrEdits = project.edits[afrTable.def.id] ?? {};
+                  const copies = afrWarmTables.length;
+                  const editCount = afrWarmTables.reduce(
+                    (n, t) => n + Object.keys(project.edits[t.def.id] ?? {}).length, 0,
+                  );
+                  return (
+                    <div className="panel">
+                      <div className="row" style={{ justifyContent: 'space-between', marginBottom: 10 }}>
+                        <div>
+                          <h2 style={{ margin: 0 }}>Overrun fuelling · {afrTable.def.name}</h2>
+                          <div className="muted small mono">
+                            {afrTable.ny} × {afrTable.nx} · {overrunAfr.suggestions.size} suggested
+                            {copies > 1 ? ` · applied to all ${copies} copies in your ROM` : ''}
+                          </div>
+                        </div>
+                        <div className="row">
+                          <button
+                            onClick={() => applyOverrunAfr(true)}
+                            disabled={overrunAfr.suggestions.size === 0}
+                          >
+                            Apply confident only
+                          </button>
+                          <button
+                            onClick={() => applyOverrunAfr(false)}
+                            disabled={overrunAfr.suggestions.size === 0}
+                          >
+                            Apply all
+                          </button>
+                          {editCount > 0 && (
+                            <button onClick={() => afrWarmTables.forEach((t) => project.clearEdits(t.def.id))}>
+                              Revert {editCount}
+                            </button>
+                          )}
+                          <CopyOut
+                            table={afrTable}
+                            edits={afrEdits}
+                            suggestions={overrunAfr.suggestions}
+                            showSuggestions={showSuggestions}
+                          />
+                        </div>
+                      </div>
+                      <div className={`notice ${overrunAfr.status === 'blocked' ? 'warn' : 'good'}`}>
+                        {overrunAfr.message}
+                        {overrunAfr.notes.length > 0 && (
+                          <ul>{overrunAfr.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
+                        )}
+                      </div>
+                      <TableGrid
+                        table={afrTable}
+                        edits={afrEdits}
+                        suggestions={overrunAfr.suggestions}
+                        showSuggestions={showSuggestions}
+                        onEdit={(r, c, v) => afrWarmTables.forEach((t) => project.setEdit(t.def.id, r, c, v))}
+                      />
+                      <div className="muted small" style={{ marginTop: 6 }}>
+                        Lower AFR is richer. Only the overrun cells of your window are touched, and
+                        only ever made richer.
+                        {copies > 1 && ' Paste the copied table into every copy of this map in EcuFlash.'}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {target === 'timing' && PROFILES[profile].overrun && (
                   <div className="panel">
                     <h2>Also needed for {PROFILES[profile].label}</h2>
                     <div className="muted small" style={{ marginBottom: 8 }}>
-                      Spark retard is only half of it. These tables control whether there is still
-                      fuel in the exhaust to burn. They are not edited automatically because
-                      getting them wrong causes stalling and hesitation rather than noise.
+                      Spark retard is only one of three levers. The AFR map sets how much fuel
+                      reaches the exhaust; the decel and fuel-cut tables decide whether any is
+                      injected at all. Those are not edited automatically because getting them
+                      wrong causes stalling and hesitation rather than noise.
                     </div>
                     {OVERRUN_TABLE_HINTS.map((hint) => {
-                      const count = def?.tables.filter((t) => t.category === hint.category).length ?? 0;
+                      const count = def?.tables.filter((t) =>
+                        hint.tableName ? t.name === hint.tableName : t.category === hint.category,
+                      ).length ?? 0;
                       return (
                         <div key={hint.category} style={{ marginBottom: 8 }}>
-                          <strong className="small">{hint.category}</strong>{' '}
+                          <strong className="small">{hint.tableName ?? hint.category}</strong>{' '}
                           <span className="muted small">({count} tables in your ROM)</span>
                           <div className="muted small">{hint.guidance}</div>
                         </div>
@@ -466,6 +598,13 @@ export function TunePage({ onOpenTable }: TunePageProps = {}) {
                   recommendation={recommendation}
                   profile={target === 'timing' ? profile : undefined}
                   healthNotes={healthNotes}
+                  related={
+                    overrunActive && overrunAfr && afrWarmTables[0]
+                      ? [{ table: afrWarmTables[0], recommendation: overrunAfr }]
+                      : undefined
+                  }
+                  findings={overrunActive ? overrunEvidence?.notes : undefined}
+                  referenceTables={overrunActive ? fuelCutTables : undefined}
                 />
               </>
             )}

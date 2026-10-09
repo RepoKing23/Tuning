@@ -89,6 +89,21 @@ function rateOfChange(values: Float64Array, time: Float64Array, i: number): numb
   return dv / dt;
 }
 
+/**
+ * Overrun: closed throttle with the engine being driven by the wheels.
+ *
+ * This is the one definition every analysis shares, so the spark map, the AFR
+ * map and the fuel-cut evidence all agree on which samples were a lift-off.
+ */
+export function isOverrunAt(log: LogFile, i: number): boolean {
+  const rpm = log.byName.get('RPM');
+  const tps = log.byName.get('TPS');
+  if (!tps || !rpm) return false;
+  const closed = tps.values[i] <= tps.min + 2;
+  const decelerating = rateOfChange(rpm.values, log.time, i) < -50;
+  return closed && decelerating;
+}
+
 export interface BinOptions {
   /** Display-scale X axis values of the target table (usually Load). */
   xAxis: number[];
@@ -174,15 +189,9 @@ export function binLog(log: LogFile, opts: BinOptions): BinnedTable {
       if (!Number.isNaN(t) && t < filter.minCoolant) { reject('engine not warm'); continue; }
     }
 
-    // Overrun: closed throttle with the engine being driven by the wheels.
     // Always evaluated, so the count survives even when the filter keeps these
     // samples rather than rejecting them.
-    let isOverrun = false;
-    if (tps && rpm) {
-      const closed = tps.values[i] <= tps.min + 2;
-      const decelerating = rateOfChange(rpm.values, log.time, i) < -50;
-      isOverrun = closed && decelerating;
-    }
+    const isOverrun = isOverrunAt(log, i);
     if (filter.excludeOverrun && isOverrun) { reject('overrun / decel fuel cut'); continue; }
 
     const xv = xCh.values[i] * (opts.xScale ?? 1);

@@ -3,12 +3,17 @@ import type { TableData } from '../../lib/rom/readTable';
 import type { Recommendation } from '../../lib/tune/types';
 import type { ProfileId } from '../../lib/tune/profiles';
 import { explainRecommendation, getApiKey, setApiKey } from '../../lib/ai/claude';
+import type { ExplainRequest } from '../../lib/ai/claude';
 
 export interface ExplainPanelProps {
   table: TableData;
   recommendation: Recommendation;
   profile?: ProfileId;
   healthNotes: string[];
+  /** Other tables changed in the same adjustment, explained together. */
+  related?: ExplainRequest['related'];
+  findings?: string[];
+  referenceTables?: TableData[];
 }
 
 /**
@@ -17,7 +22,9 @@ export interface ExplainPanelProps {
  * The recommendations above are already complete without this; it explains them
  * and answers follow-up questions.
  */
-export function ExplainPanel({ table, recommendation, profile, healthNotes }: ExplainPanelProps) {
+export function ExplainPanel({
+  table, recommendation, profile, healthNotes, related, findings, referenceTables,
+}: ExplainPanelProps) {
   const [enabled, setEnabled] = useState(() => !!getApiKey());
   const [key, setKey] = useState(getApiKey);
   const [question, setQuestion] = useState('');
@@ -29,7 +36,9 @@ export function ExplainPanel({ table, recommendation, profile, healthNotes }: Ex
     setBusy(true);
     setError(null);
     try {
-      setAnswer(await explainRecommendation({ table, recommendation, profile, healthNotes, question }));
+      setAnswer(await explainRecommendation({
+        table, recommendation, profile, healthNotes, related, findings, referenceTables, question,
+      }));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -63,7 +72,8 @@ export function ExplainPanel({ table, recommendation, profile, healthNotes }: Ex
           </div>
           <div className="muted small" style={{ marginBottom: 8 }}>
             Stored in this browser only and sent to Anthropic alone. Your ROM is never
-            transmitted — only the computed summary and the changed cells.
+            transmitted — only the computed summary, the changed cells and, for overrun
+            profiles, the current values of the few fuel-cut tables involved.
           </div>
 
           <div className="row" style={{ marginBottom: 8 }}>
@@ -89,6 +99,12 @@ export function ExplainPanel({ table, recommendation, profile, healthNotes }: Ex
             </div>
           )}
           {error && <div className="notice bad">{error}</div>}
+          {related && related.length > 0 && (
+            <div className="muted small" style={{ marginBottom: 8 }}>
+              Explains {[table, ...related.map((r) => r.table)].map((t) => t.def.name).join(' + ')}{' '}
+              together, with what your logs show on the overrun.
+            </div>
+          )}
           {answer && (
             <div className="notice info" style={{ whiteSpace: 'pre-wrap' }}>{answer}</div>
           )}

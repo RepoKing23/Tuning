@@ -283,7 +283,8 @@ export function recommendTiming(
     );
     notes.push(
       'Spark retard alone gives a soft burble. The crackle comes from fuel still being ' +
-        'injected on the overrun — see the decel and fuel-cut tables listed below.',
+        'injected on the overrun — see the AFR map enrichment and the decel and fuel-cut ' +
+        'tables below.',
     );
   }
 

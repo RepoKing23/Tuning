@@ -10,7 +10,7 @@ never uploaded anywhere.
 ```bash
 npm install
 npm run dev      # http://localhost:5173
-npm test         # 78 tests against the real sample files
+npm test         # 97 tests against the real sample files
 npm run build    # static site in dist/
 ```
 
@@ -117,8 +117,8 @@ profiles:
 |---|---|
 | Economy | Adds timing in the light-load cruise region only. |
 | Power | Works mid- and high-load cells toward best torque. |
-| Pops & bangs | Drives the closed-throttle overrun cells to about 10° after TDC. |
-| Flames | The same mechanism at about 20° after TDC, across a wider rpm band. |
+| Pops & bangs | Drives the closed-throttle overrun cells to about 10° after TDC and enriches the overrun AFR to about 12.0:1. |
+| Flames | The same mechanism at about 20° after TDC and 11.2:1, across a wider rpm band. |
 
 The two overrun profiles let you pick the exact block of cells they work on —
 RPM from/to and load from/to, chosen from the loaded spark map's own breakpoints
@@ -148,6 +148,22 @@ than subtracting a fixed amount — the stock map holds 28-45° here, and no
 bounded subtraction from that reaches the far side of TDC, which is the only
 place unburnt fuel survives into the exhaust.
 
+**Overrun is three levers, and the overrun profiles analyse all three together.**
+Retard past TDC only makes noise if there is unburnt fuel in the exhaust to
+light, so the same window is also applied to `AFR Map warm`:
+
+- The lowest load column in the window — the one the stock ROM already enriches
+  for decel — is driven to the profile's rich target (scaled by intensity). Every
+  copy of the map in the ROM gets the same change. Cells are only ever made
+  richer.
+- Higher load columns are shared with light cruise, so they are enriched only
+  when the logs show them as mostly overrun; otherwise cruise would run rich.
+- The logs are then checked for whether the injectors fire at all on a lift.
+  If `IPW` reads zero, the decel fuel cut is active, the AFR map is never
+  consulted there, and neither change makes a sound — the app says so first,
+  since that is the blocker. On the supplied logs the injectors are shut on
+  every lift, which is why the stock map's rich overrun column makes no pops.
+
 Every suggested cell carries its sample count, knock count, confidence and the
 reason for the change — hover it in the grid.
 
@@ -156,12 +172,29 @@ reason for the change — hover it in the grid.
 > housings. The app warns about this and defaults their aggression low, but the
 > risk is real.
 
+### Dyno
+
+A virtual dyno reads wheel horsepower and torque from a road log, for comparison
+with a Dynojet sheet. It finds every full-throttle pull in one gear, measures
+that gear's rpm-to-speed ratio, and takes road speed from RPM rather than the
+Speed channel (EvoScan logs speed in whole km/h, which differentiates into
+steps). Power is mass × acceleration plus aero drag and rolling resistance,
+times speed; torque is that power at engine rpm, as a Dynojet plots it.
+
+Enter the car's weight with driver, drag coefficient, frontal area and rolling
+resistance in the sidebar; drivetrain loss is used only for the crank estimate.
+Pulls overlay on shared-rpm power and torque charts. The numbers assume a flat
+road, so run the same pull both ways and compare.
+
 ### Optional Claude layer
 
 Off by default and not needed for anything above. Supply your own Anthropic API
 key and it will explain the computed suggestions in plain English and answer
-follow-up questions. The key is stored in your browser only, and the request
-carries the computed summary and changed cells — never your ROM.
+follow-up questions. For the overrun profiles it is given the whole adjustment
+— spark map changes, AFR map changes, what the logs show on the overrun, and the
+current fuel-cut tables — and asked to judge them as one change. The key is
+stored in your browser only, and the request carries the computed summary,
+changed cells and those few fuel-cut tables — never your ROM.
 
 ## Load scale
 
@@ -208,12 +241,13 @@ its rail values are dropped.
 ```
 src/lib/log/     CSV parsing, channel metadata, health gate
 src/lib/rom/     definition XML, scaling expressions, table reads, ROM identity
-src/lib/tune/    sample binning, MAF and timing recommenders, tune profiles
+src/lib/tune/    sample binning, MAF, timing and overrun-fuel recommenders, tune profiles
+src/lib/dyno/    virtual dyno: pull detection, power and torque from a road log
 src/lib/ai/      optional Claude explanation layer
 src/components/  viewer, table and tuning UI
-src/pages/       the three tabs
+src/pages/       the four tabs
 samples/         the ROM, definition and logs the tests run against
-tests/           78 tests, all against those real files
+tests/           97 tests, against those real files and synthetic pulls
 ```
 
 ## Notes on the defaults

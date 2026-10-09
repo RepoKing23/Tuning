@@ -151,7 +151,7 @@
 	<scaling name="CheckLight16" units="Seconds" toexpr="x/2" frexpr="x*2" format="%.1f" min="0" max="128" inc="0.5" storagetype="uint16" endian="big"/>
 	<scaling name="ClosedLoopGain" units="*" toexpr="1+(x-128)/512" frexpr="128+(x-1)*512" format="%.3f" min="0.75" max="1.248" inc="0.002" storagetype="uint16" endian="big"/>
 	<scaling name="Cranking_IPW" units="mSec" toexpr="x*0.948" frexpr="x/0.948" format="%.1f" min="0" max="80" inc="0.948" storagetype="uint8" endian="big"/>
-	<scaling name="Cranking_RPM" units="RPM" toexpr="24000/(960-x)" frexpr="960-24 00/x" format="%.0f" min="0" max="500" inc="5" storagetype="uint16" endian="big"/>
+	<scaling name="Cranking_RPM" units="RPM" toexpr="24000/(960-x)" frexpr="960-24000/x" format="%.0f" min="0" max="500" inc="5" storagetype="uint16" endian="big"/>
 	<scaling name="DwellTime" units="mSec" toexpr="x*0.064" frexpr="x/0.064" format="%.2f" min="1.2" max="5.5" inc="0.064" storagetype="uint8" endian="big"/>
 	<scaling name="ECU ID" units="units" toexpr="x" frexpr="x" format="%08x" min="0" max="1e+08" inc="1" storagetype="uint32" endian="big"/>
 	<scaling name="EGRDuty" units="%" toexpr="x/1.28" frexpr="x*1.28" format="%.1f" min="0" max="100" inc="0.1" storagetype="uint8" endian="big"/>
@@ -193,6 +193,7 @@
 	<scaling name="PERCENT256" units="%" toexpr="x/2.55" frexpr="x*2.55" format="%.0f" min="0" max="100" inc="0.39" storagetype="uint16" endian="big"/>
 	<scaling name="PERCENT4096" units="%" toexpr="x*0.0244" frexpr="x/0.0244" format="%.1f" min="0" max="100" inc="0.0244" storagetype="uint16" endian="big"/>
 	<scaling name="Percent128" units="%" toexpr="x/1.28" frexpr="x*1.28" format="%.1f" min="50" max="150" inc="0.78125" storagetype="uint8" endian="big"/>
+	<scaling name="Percent128_16" units="%" toexpr="x/1.28" frexpr="x*1.28" format="%.0f" min="0" max="100" inc="0.78125" storagetype="uint16" endian="big"/>
 	<scaling name="Percent255" units="%" toexpr="100*x/255" frexpr="255*x/100" format="%.0f" min="0" max="100" inc="0.3921" storagetype="uint8" endian="big"/>
 	<scaling name="Percent256" units="%" toexpr="x/2.55" frexpr="2.55*x" format="%.0f" min="0" max="100" inc="0.39" storagetype="uint8" endian="big"/>
 	<scaling name="Percent512" units="%" toexpr="100*x/512" frexpr="512*x/100" format="%.3f" min="0" max="100" inc="0.1953" storagetype="uint8" endian="big"/>
@@ -212,7 +213,7 @@
 	<scaling name="STEPS16" units="ISC POSITION" toexpr="x" frexpr="x" format="%.0f" min="0" max="2800" inc="1" storagetype="uint16" endian="big"/>
 	<scaling name="STFTFuelTrim" units="STFT %" toexpr="(x*0.1953)-25" frexpr="(x+25)/0.1953125" format="%.2f" min="-25" max="24.8" inc="0.195" storagetype="uint8" endian="big"/>
 	<scaling name="STFT_Limit" units="STFT %" toexpr="x*0.1953-25" frexpr="(x+25)/0.1953" format="%.3f" min="-25" max="25" inc="0.195" storagetype="uint8" endian="big"/>
-	<scaling name="Spark Correction mivec" units="units" toexpr="(x*0.0125)-1.6" frexpr="(x=1.6)/0.0125" format="%.2f" min="0" max="255" inc="1" storagetype="uint8" endian="big"/>
+	<scaling name="Spark Correction mivec" units="units" toexpr="(x*0.0125)-1.6" frexpr="(x+1.6)/0.0125" format="%.2f" min="0" max="255" inc="1" storagetype="uint8" endian="big"/>
 	<scaling name="Speed16" units="km/h" toexpr="x*2" frexpr="x/2" format="%.0f" min="0" max="510" inc="1" storagetype="uint16" endian="big"/>
 	<scaling name="Speed8" units="km/h" toexpr="x*2" frexpr="x/2" format="%.0f" min="0" max="510" inc="1" storagetype="uint8" endian="big"/>
 	<scaling name="Startup_Enrich" units="Enrichment" toexpr="(x/64) +1" frexpr="(x-1.0)*64" format="%.3f" min="1" max="4.984" inc="0.015625" storagetype="uint8" endian="big"/>
@@ -255,6 +256,7 @@
 	<scaling name="Timing-Cut" units="degrees" toexpr="x*0.35" frexpr="x/0.35" format="%.2f" min="0" max="20" inc="0.35" storagetype="uint8" endian="big"/>
 	<scaling name="TimingCRK" units="degrees" toexpr="x-20" frexpr="x+20" format="%.0f" min="0" max="15" inc="1" storagetype="int8" endian="big"/>
 	<scaling name="TimingMin" units="degrees" toexpr="x-275" frexpr="x+275" format="%.0f" min="-60" max="-20" inc="1" storagetype="uint8" endian="big"/>
+	<scaling name="TimingRetard" units="degrees retard" toexpr="x" frexpr="x" format="%.0f" min="0" max="30" inc="1" storagetype="uint8" endian="big"/>
 	<scaling name="TimingTrim" units="degrees" toexpr="x-128" frexpr="x+128" format="%.0f" min="-128" max="128" inc="1" storagetype="uint8" endian="big"/>
 	<scaling name="VOLTS" units="Volts" toexpr="x*5/1023" frexpr="x*1023/5" format="%.2f" min="0" max="5" inc="0.05" storagetype="uint16" endian="big"/>
 	<scaling name="Volts16" units="Volts" toexpr="x*5/256" frexpr="x*256/5" format="%.2f" min="0" max="5" inc="0.02" storagetype="uint16" endian="big"/>
@@ -271,9 +273,18 @@
 	<scaling name="x4_byte" units="units" toexpr="x*4" frexpr="x/4" format="%.0f" min="0" max="510" inc="1" storagetype="uint8" endian="big"/>
 	<scaling name="x4_word" units="units" toexpr="x*4" frexpr="x/4" format="%.0f" min="0" max="510" inc="1" storagetype="uint16" endian="big"/>
 
-	<table name="Stationary Rev Limit - RPM" category="Limits" address="51634" type="1D" scaling="RPMStatLimit"/>
+	<!-- 51634 was labelled "Stationary Rev Limit". Code at 0xA00FC compares it (hysteresis pair 51634/51636)
+	     against a 0-1023 input shifted right by 2, not against engine speed, so it is not a rev limit. -->
+	<table name="Unknown Threshold 51634 (NOT a rev limit)" category="Limits" address="51634" type="2D" scaling="uint16">
+		<table name="Threshold" type="Static Y Axis" elements="2">
+			<data>Set</data>
+			<data>Clear</data>
+		</table>
+	</table>
 
-	<table name="Moving Rev Limiter" category="Limits" address="5125c" type="1D" scaling="RPMLimit"/>
+	<!-- 5125c is not read anywhere in the code. The live fuel-cut limiter is "Fuel-Cut, Rev Limiter" (5125e/51260,
+	     read at 0x2BBE0). It applies in all gears and when stationary; this ROM has no separate stationary limiter. -->
+	<table name="Rev Limiter (unused copy - edit Fuel-Cut, Rev Limiter)" category="Limits" address="5125c" type="1D" scaling="RPMLimit"/>
 
 	<table name="AFR Map warm" category="FUEL" address="53027" type="3D" swapxy="true" scaling="AFR">
 		<table name="Load" address="5bc4c" type="X Axis" elements="13" scaling="Load"/>
@@ -427,9 +438,18 @@
 		<table name="RPM" address="5bc82" type="Y Axis" elements="20" scaling="RPM"/>
 	</table>
 
-	<table name="Spark Retard Cruise Control ON" category="SPARK" address="581ab" type="3D" swapxy="true" scaling="Timing">
-		<table name="LOAD*" address="5ce38" type="X Axis" elements="12" scaling="Load"/>
-		<table name="RPM*" address="5ce12" type="Y Axis" elements="16" scaling="RPM"/>
+	<!-- Cruise retard (verified in code at 0x1F10C-0x1F1C4):
+	     retard = min(this map, Max Retard table)
+	     timing = blend(main map, economode map, Economode Blend %) - retard, never below the main hi/lo octane map.
+	     The map header has no offset, so cells are unsigned degrees of retard (0 = none), not signed timing.
+	     It only changes timing while the economode blend is above 0 %, and is capped by the Max Retard table. -->
+	<table name="Spark Retard Cruise Control ON" category="SPARK" address="581ab" type="3D" swapxy="true" scaling="TimingRetard">
+		<table name="Load" address="5ce38" type="X Axis" elements="12" scaling="Load"/>
+		<table name="RPM" address="5ce12" type="Y Axis" elements="16" scaling="RPM"/>
+	</table>
+
+	<table name="Spark Retard Cruise Control ON - Max Retard" category="SPARK" address="58198" type="2D" scaling="TimingRetard">
+		<table name="Economode Blend %" address="5cdf6" type="Y Axis" elements="11" scaling="Percent128_16"/>
 	</table>
 
 	<table name="Upper Bound Ignition Timing" category="SPARK" address="5b7e3" type="3D" swapxy="true" scaling="Timing">
@@ -442,7 +462,7 @@
 		<table name="RPM" address="5bc82" type="Y Axis" elements="20" scaling="RPM"/>
 	</table>
 
-	<table name="Spark Correction Intake Mivec warm" category="SPARK" address="567e5" type="3D" swapxy="true" scaling="Spark Correction mivec">
+	<table name="Spark Correction Intake Mivec warm" category="SPARK" address="567bf" type="3D" swapxy="true" scaling="Spark Correction mivec">
 		<table name="Load" address="5bcb0" type="X Axis" elements="13" scaling="Load"/>
 		<table name="RPM" address="5bc82" type="Y Axis" elements="20" scaling="RPM"/>
 	</table>
