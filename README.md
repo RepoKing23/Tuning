@@ -10,7 +10,7 @@ never uploaded anywhere.
 ```bash
 npm install
 npm run dev      # http://localhost:5173
-npm test         # 85 tests against the real sample files
+npm test         # 97 tests against the real sample files
 npm run build    # static site in dist/
 ```
 
@@ -172,6 +172,20 @@ reason for the change — hover it in the grid.
 > housings. The app warns about this and defaults their aggression low, but the
 > risk is real.
 
+### Dyno
+
+A virtual dyno reads wheel horsepower and torque from a road log, for comparison
+with a Dynojet sheet. It finds every full-throttle pull in one gear, measures
+that gear's rpm-to-speed ratio, and takes road speed from RPM rather than the
+Speed channel (EvoScan logs speed in whole km/h, which differentiates into
+steps). Power is mass × acceleration plus aero drag and rolling resistance,
+times speed; torque is that power at engine rpm, as a Dynojet plots it.
+
+Enter the car's weight with driver, drag coefficient, frontal area and rolling
+resistance in the sidebar; drivetrain loss is used only for the crank estimate.
+Pulls overlay on shared-rpm power and torque charts. The numbers assume a flat
+road, so run the same pull both ways and compare.
+
 ### Optional Claude layer
 
 Off by default and not needed for anything above. Supply your own Anthropic API
@@ -228,11 +242,12 @@ its rail values are dropped.
 src/lib/log/     CSV parsing, channel metadata, health gate
 src/lib/rom/     definition XML, scaling expressions, table reads, ROM identity
 src/lib/tune/    sample binning, MAF, timing and overrun-fuel recommenders, tune profiles
+src/lib/dyno/    virtual dyno: pull detection, power and torque from a road log
 src/lib/ai/      optional Claude explanation layer
 src/components/  viewer, table and tuning UI
-src/pages/       the three tabs
+src/pages/       the four tabs
 samples/         the ROM, definition and logs the tests run against
-tests/           85 tests, all against those real files
+tests/           97 tests, against those real files and synthetic pulls
 ```
 
 ## Notes on the defaults
