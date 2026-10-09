@@ -71,6 +71,14 @@ export interface Profile {
    * valve opens, which does not happen at any positive advance.
    */
   overrunTargetDeg?: number;
+  /**
+   * AFR the overrun cells of the AFR map are enriched to.
+   *
+   * Retarded spark only makes noise if there is fuel to burn in the exhaust.
+   * Commanding the overrun cells rich is what puts it there; a stoichiometric
+   * charge burns almost completely in the cylinder even when lit late.
+   */
+  overrunTargetAfr?: number;
   /** Scales every suggested step. 1.0 is the profile's full nominal step. */
   aggression: number;
   /** Cells the profile wants to change. Unused by overrun profiles. */
@@ -114,8 +122,9 @@ export const PROFILES: Record<ProfileId, Profile> = {
     label: 'Pops & bangs',
     description:
       'Drives the closed-throttle overrun cells to about 10 degrees after TDC, so the charge ' +
-      'is still burning when the exhaust valve opens. Needs the decel fuel-cut tables ' +
-      'softened too — see the notes below.',
+      'is still burning when the exhaust valve opens, and enriches the same overrun cells of ' +
+      'the AFR map to about 12.0:1 so there is fuel left to burn. Needs the decel fuel-cut ' +
+      'tables softened too — see the notes below.',
     warning:
       'This burns fuel in the exhaust on every lift. It destroys catalytic converters and, ' +
       'run hard or for long, damages exhaust valves and turbine housings. Expect to fail an ' +
@@ -123,6 +132,7 @@ export const PROFILES: Record<ProfileId, Profile> = {
     maxAdvance: 0,
     maxKnockRetard: 12,
     overrunTargetDeg: -10,
+    overrunTargetAfr: 12.0,
     aggression: 1,
     region: (rpm, load) => load <= 20 && rpm >= 1500 && rpm <= 4500,
     defaultWindow: { rpmMin: 1500, rpmMax: 4500, loadMin: 0, loadMax: 20 },
@@ -133,7 +143,8 @@ export const PROFILES: Record<ProfileId, Profile> = {
     label: 'Flames',
     description:
       'The same overrun mechanism as pops & bangs, taken further: about 20 degrees after TDC ' +
-      'across a wider rpm band, with the fuel cut delayed longer.',
+      'across a wider rpm band, with the overrun AFR enriched to about 11.2:1 and the fuel cut ' +
+      'delayed longer.',
     warning:
       'Substantially more damaging than pops & bangs. Unburnt fuel igniting in the exhaust ' +
       'will destroy a catalytic converter quickly and can crack a manifold, burn exhaust ' +
@@ -142,6 +153,7 @@ export const PROFILES: Record<ProfileId, Profile> = {
     maxAdvance: 0,
     maxKnockRetard: 20,
     overrunTargetDeg: -20,
+    overrunTargetAfr: 11.2,
     aggression: 1,
     region: (rpm, load) => load <= 30 && rpm >= 1500,
     defaultWindow: { rpmMin: 1500, rpmMax: 6500, loadMin: 0, loadMax: 30 },
@@ -182,14 +194,24 @@ export const MIN_SAMPLES = 12;
 export const SATURATION_SAMPLES = 80;
 
 /**
- * The decel and fuel-cut tables that actually control overrun fuelling.
+ * The tables that, with the spark map, control overrun fuelling.
  *
  * Spark retard alone makes a soft burble; the crackle comes from fuel still
- * being injected on the overrun, which these tables govern. They are listed
- * rather than edited automatically because their axes and meaning vary, and
- * getting them wrong causes stalling and driveability faults rather than noise.
+ * being injected on the overrun. The AFR map decides how much fuel that is and
+ * is enriched by `recommendOverrunAfr`. The decel and fuel-cut tables decide
+ * whether any is injected at all; they are listed rather than edited
+ * automatically because their axes and meaning vary, and getting them wrong
+ * causes stalling and driveability faults rather than noise.
  */
-export const OVERRUN_TABLE_HINTS: { category: string; guidance: string }[] = [
+export const OVERRUN_TABLE_HINTS: { category: string; guidance: string; tableName?: string }[] = [
+  {
+    category: 'FUEL',
+    tableName: 'AFR Map warm',
+    guidance:
+      'AFR Map warm: the overrun cells are enriched automatically above. The ROM carries ' +
+      'more than one copy; apply the same change to every copy. AFR Map cold only matters ' +
+      'before the engine is warm and is best left alone.',
+  },
   {
     category: 'THROTTLE DECEL (pre fuel cut)',
     guidance:

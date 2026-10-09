@@ -13,6 +13,8 @@ import { analyseAfr, recommendFuelMap } from '../src/lib/tune/afr';
 import { detectLoadScale } from '../src/lib/log/loadScale';
 import { analyseKnock, recommendKnockRetard, recommendNoiseFloor } from '../src/lib/tune/knock';
 import type { ProfileId } from '../src/lib/tune/profiles';
+import { analyseOverrun, overrunAfrTarget, recommendOverrunAfr } from '../src/lib/tune/overrun';
+import { buildContext } from '../src/lib/ai/claude';
 
 const root = resolve(__dirname, '..');
 const rom = new Uint8Array(readFileSync(resolve(root, 'samples/stock_2.bin')));
@@ -337,6 +339,105 @@ describe('overrun profiles', () => {
     const reasons = [...rec.suggestions.values()].map((s) => s.reason).join(' ');
     expect(reasons).toMatch(/no closed-throttle deceleration in this cell/);
     expect(rec.notes.join(' ')).toMatch(/after TDC/);
+  });
+});
+
+describe('overrun fuelling', () => {
+  const afrWarm = tableNamed('AFR Map warm');
+  const loadScale = detectLoadScale(inputs.map((i) => i.log), afrWarm).factor;
+  const pops = (extra: Partial<Parameters<typeof recommendOverrunAfr>[2]> = {}) =>
+    recommendOverrunAfr(inputs, afrWarm, {
+      profile: 'popsAndBangs', intensity: 1, loadScale, minSamples: 12, ...extra,
+    });
+
+  it('enrich the overrun cells of the AFR map, never lean them', () => {
+    const rec = pops();
+    expect(rec.status).toBe('ok');
+    expect(rec.suggestions.size).toBeGreaterThan(0);
+    const target = overrunAfrTarget('popsAndBangs', 1);
+    for (const [key, s] of rec.suggestions) {
+      const [r, c] = key.split(',').map(Number);
+      expect(s.delta).toBeLessThan(0);
+      expect(s.value).toBeLessThan(afrWarm.values[r][c]);
+      expect(Math.abs(s.value - target)).toBeLessThan(0.15);
+      // Inside the default window, and never idle.
+      expect(afrWarm.y.values[r]).toBeGreaterThanOrEqual(1500);
+      expect(afrWarm.y.values[r]).toBeLessThanOrEqual(4500);
+    }
+  });
+
+  it('keep light cruise at stoichiometric unless the logs show it is overrun', () => {
+    // The 20 Ev% column is shared with light cruise; the 10 Ev% column is the
+    // one the stock ROM already enriches for decel.
+    const rec = pops();
+    const cols = new Set([...rec.suggestions.keys()].map((k) => Number(k.split(',')[1])));
+    expect([...cols]).toEqual([afrWarm.x.values.indexOf(10)]);
+    expect(rec.notes.join(' ')).toMatch(/light cruise/);
+  });
+
+  it('go richer for flames than for pops and bangs, and scale with intensity', () => {
+    expect(overrunAfrTarget('flames', 1)).toBeLessThan(overrunAfrTarget('popsAndBangs', 1));
+    expect(overrunAfrTarget('popsAndBangs', 0.5)).toBeGreaterThan(overrunAfrTarget('popsAndBangs', 1));
+    const hard = recommendOverrunAfr(inputs, afrWarm, {
+      profile: 'flames', intensity: 1.5, loadScale, minSamples: 12,
+    });
+    for (const s of hard.suggestions.values()) {
+      expect(s.value).toBeGreaterThanOrEqual(afrWarm.scaling.min - 0.05);
+    }
+  });
+
+  it('do nothing for profiles that leave the overrun alone', () => {
+    expect(recommendOverrunAfr(inputs, afrWarm, { profile: 'eco', intensity: 1 }).status).toBe('blocked');
+  });
+
+  it('find the decel fuel cut in the real logs', () => {
+    // On the supplied drives the injector pulse is zero on every lift, which
+    // is exactly why the stock map's rich overrun column makes no noise.
+    const ev = analyseOverrun(inputs, { profile: 'popsAndBangs', intensity: 1 });
+    expect(ev.overrunSamples).toBeGreaterThan(0);
+    expect(ev.ipwSamples).toBeGreaterThan(0);
+    expect(ev.fuelCutBlocking).toBe(true);
+    expect(ev.notes[0]).toMatch(/fuel cut/);
+  });
+
+  it('report fuel still flowing when the injectors keep firing', () => {
+    const header = 'LogEntrySeconds,RPM,Load,TPS,IPW,WideBandAF,Target_AFR,KnockSum\n';
+    const rows: string[] = [];
+    for (let i = 0; i < 300; i++) {
+      // Closed throttle, rpm falling 300 rpm/s, injectors still pulsing.
+      rows.push(`${(i * 0.1).toFixed(3)},${(4500 - i * 30).toFixed(0)},10,0,1.2,13.5,12.4,0`);
+    }
+    const log = parseEvoScanCsv(header + rows.join('\n'), 'lift.csv');
+    const ev = analyseOverrun([{ log, health: assessChannels(log) }], {
+      profile: 'popsAndBangs', intensity: 1,
+    });
+    expect(ev.fuelCutBlocking).toBe(false);
+    expect(ev.notes.join(' ')).toMatch(/Fuel kept flowing/);
+  });
+});
+
+describe('Claude context', () => {
+  it('carries spark, AFR and fuel-cut together for an overrun profile', () => {
+    const afrWarm = tableNamed('AFR Map warm');
+    const timing = recommendTiming(inputs, spark, {
+      profile: 'popsAndBangs', minSamples: 12, intensity: 1, timeRange: null,
+    });
+    const afr = recommendOverrunAfr(inputs, afrWarm, { profile: 'popsAndBangs', intensity: 1 });
+    const ev = analyseOverrun(inputs, { profile: 'popsAndBangs', intensity: 1 });
+    const ctx = buildContext({
+      table: spark,
+      recommendation: timing,
+      profile: 'popsAndBangs',
+      healthNotes: [],
+      related: [{ table: afrWarm, recommendation: afr }],
+      findings: ev.notes,
+      referenceTables: [tableNamed('Decel Fuel-Cut, TPS Overrun Base')],
+    });
+    expect(ctx).toMatch(/High Octane Spark Map/);
+    expect(ctx).toMatch(/AFR Map warm/);
+    expect(ctx).toMatch(/Decel Fuel-Cut, TPS Overrun Base/);
+    expect(ctx).toMatch(/What the logs show/);
+    expect(ctx).toMatch(/changes 2 tables together/);
   });
 });
 
