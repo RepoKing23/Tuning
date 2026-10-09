@@ -3,7 +3,7 @@ import type { ChannelHealth } from '../log/channelHealth';
 import type { LogFile } from '../log/types';
 import { clampAndQuantise } from '../rom/readTable';
 import type { TableData } from '../rom/readTable';
-import { median, nearestIndex } from './binning';
+import { isOverrunAt, median, nearestIndex } from './binning';
 import { CLOSED_LOOP_TARGET_AFR } from './maf';
 import { MIN_SAMPLES, SATURATION_SAMPLES } from './profiles';
 import { blocked } from './types';
@@ -64,6 +64,12 @@ export interface AfrOptions {
   maxFuelChangePct: number;
   /** Multiplier taking the log's Load into the ROM's Ev%. See detectLoadScale. */
   loadScale?: number;
+  /**
+   * The ROM's injector scaling, when the definition has one. A flat offset
+   * everywhere is what this table corrects, so it is named as the fix and the
+   * corrected value is worked out.
+   */
+  injectorTable?: TableData | null;
 }
 
 export const DEFAULT_AFR_OPTIONS: AfrOptions = {
@@ -101,6 +107,7 @@ function collect(inputs: AfrLogInput[], loadScale = 1) {
   const richReadings: number[] = [];
   let railed = 0;
   let rejected = 0;
+  let overrun = 0;
 
   for (const { log } of inputs) {
     const wb = log.byName.get('WideBandAF');
@@ -111,6 +118,11 @@ function collect(inputs: AfrLogInput[], loadScale = 1) {
     if (!wb || !target) continue;
 
     for (let i = 0; i < log.rowCount; i++) {
+      // A lift-off is not fuelling evidence: the injectors are cut or ramping,
+      // and the wideband is reading the exhaust of a transient. Left in, it
+      // lands in the low-load column and drags that cell's fuel either way.
+      if (isOverrunAt(log, i)) { overrun++; continue; }
+
       const measured = wb.values[i];
       const want = target.values[i];
       if (!isPlausible('WideBandAF', measured) || !isPlausible('Target_AFR', want) || want <= 0) {
@@ -133,7 +145,7 @@ function collect(inputs: AfrLogInput[], loadScale = 1) {
       open.push({ errorPct, volts: v, rpm: r, load: l * loadScale });
     }
   }
-  return { open, closed, richReadings, railed, rejected };
+  return { open, closed, richReadings, railed, rejected, overrun };
 }
 
 /**
@@ -157,7 +169,7 @@ export function analyseAfr(
 
   if (inputs.length === 0) return { ...blocked('No logs selected.'), ...empty };
 
-  const { open, closed, richReadings, railed, rejected } = collect(inputs, options.loadScale ?? 1);
+  const { open, closed, richReadings, railed, rejected, overrun } = collect(inputs, options.loadScale ?? 1);
   const notes: string[] = [];
 
   if (open.length === 0 && closed.length === 0) {
@@ -268,18 +280,41 @@ export function analyseAfr(
   const causes: AfrCause[] = [];
 
   if (Math.abs(globalOffset) >= NEGLIGIBLE_PCT) {
-    causes.push({
-      id: 'global',
-      label: 'A flat offset across the whole range',
-      magnitudePct: Math.abs(globalOffset),
-      table: null,
-      explanation:
-        `Fuelling is out by ${globalOffset.toFixed(1)}% everywhere, by about the same amount ` +
-        'regardless of airflow or operating point. That pattern is injector sizing, fuel ' +
-        'pressure, or a global MAF gain — not a shape error in any one table. No table in this ' +
-        'definition corrects it: check injector scaling and fuel pressure first, because ' +
-        'spreading a constant offset across a map hides the real fault.',
-    });
+    const pattern =
+      `Fuelling is out by ${globalOffset.toFixed(1)}% everywhere, by about the same amount ` +
+      'regardless of airflow or operating point. That pattern is injector sizing, fuel ' +
+      'pressure, or a global MAF gain — not a shape error in any one table, and spreading a ' +
+      'constant offset across a map hides the real fault. ';
+    const inj = options.injectorTable;
+    const current = inj?.values[0]?.[0];
+    if (inj && current !== undefined && Number.isFinite(current) && current > 0) {
+      // The ECU sizes each pulse from the injector flow it believes it has. A
+      // smaller number makes it open longer, so lean means scale it down.
+      const corrected = clampAndQuantise(inj.scaling, current / (1 + globalOffset / 100));
+      causes.push({
+        id: 'global',
+        label: 'A flat offset across the whole range',
+        magnitudePct: Math.abs(globalOffset),
+        table: inj.def.name,
+        explanation:
+          pattern +
+          `Rule out fuel pressure first; if it is healthy, ${inj.def.name} corrects this: ` +
+          `${current.toFixed(0)} to about ${corrected.toFixed(0)} ${inj.units || 'cc/min'} ` +
+          `(${globalOffset >= 0 ? 'more' : 'less'} fuel everywhere). It also moves closed-loop ` +
+          'fuelling, so the long-term trims should settle toward zero afterwards — that is the ' +
+          'check that it was the right fix. Re-log before touching the fuel map.',
+      });
+    } else {
+      causes.push({
+        id: 'global',
+        label: 'A flat offset across the whole range',
+        magnitudePct: Math.abs(globalOffset),
+        table: null,
+        explanation:
+          pattern +
+          'No table in this definition corrects it: check injector scaling and fuel pressure.',
+      });
+    }
   }
 
   if (mafMagnitude >= NEGLIGIBLE_PCT) {
@@ -314,7 +349,8 @@ export function analyseAfr(
   const maxLoad = Math.max(...open.map((s) => s.load));
   notes.push(
     `${open.length.toLocaleString()} open-loop samples used, ${railed.toLocaleString()} railed ` +
-      `readings and ${rejected.toLocaleString()} implausible or incomplete samples dropped.`,
+      `readings, ${overrun.toLocaleString()} closed-throttle overrun samples and ` +
+      `${rejected.toLocaleString()} implausible or incomplete samples dropped.`,
   );
   notes.push(
     `Open-loop data reaches ${maxLoad.toFixed(0)} Ev% load. Nothing above that has been ` +
@@ -376,6 +412,7 @@ export function recommendFuelMap(
   const globalOffset = binMedians.length ? median(binMedians) : 0;
 
   const cells = new Map<string, number[]>();
+  const totals = new Map<string, number[]>();
   for (const s of open) {
     const airflowPart = mafComponent.get(nearestIndex(voltAxis, s.volts)) ?? globalOffset;
     const row = nearestIndex(fuelTable.y.values, s.rpm);
@@ -384,7 +421,11 @@ export function recommendFuelMap(
     const arr = cells.get(key) ?? [];
     arr.push(s.errorPct - airflowPart);
     cells.set(key, arr);
+    const tot = totals.get(key) ?? [];
+    tot.push(s.errorPct);
+    totals.set(key, tot);
   }
+  let held = 0;
 
   const suggestions = new Map<string, CellSuggestion>();
   let starved = 0;
@@ -393,6 +434,22 @@ export function recommendFuelMap(
   for (const [key, errs] of cells) {
     if (errs.length < options.minSamples) { starved++; continue; }
     const err = median(errs);
+
+    // The residual assumes the airflow and flat-offset parts get fixed in their
+    // own tables. Until they are, a cell can read rich of its airflow bin while
+    // still running lean overall — pulling fuel there would lean out a cell that
+    // is already lean, at the loads where that hurts most. Hold it instead.
+    const total = median(totals.get(key) ?? []);
+    if (
+      Math.abs(total) >= NEGLIGIBLE_PCT &&
+      Math.abs(err) >= NEGLIGIBLE_PCT &&
+      Math.sign(total) !== Math.sign(err)
+    ) {
+      held++;
+      skipped++;
+      continue;
+    }
+
     const capped = Math.max(-options.maxFuelChangePct, Math.min(options.maxFuelChangePct, err));
     if (Math.abs(capped) < NEGLIGIBLE_PCT) { skipped++; continue; }
 
@@ -419,7 +476,15 @@ export function recommendFuelMap(
       `${suggestions.size} cell(s) have a fuel correction, from ${analysis.openLoopSamples} ` +
       'open-loop samples.',
     suggestions,
-    notes: analysis.notes,
+    notes: held > 0
+      ? [
+          ...analysis.notes,
+          `${held} cell(s) were held: their correction points the opposite way to what they ` +
+            'actually measure (e.g. leaner, on a cell already running lean), because it assumes ' +
+            'the airflow and flat-offset fixes are already in. Apply those, re-log, and these ' +
+            'cells will be judged on the new data.',
+        ]
+      : analysis.notes,
     skipped,
     starved,
   };

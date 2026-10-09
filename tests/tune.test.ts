@@ -508,6 +508,36 @@ describe('AFR analysis', () => {
     'MAF CALIBRATION Part 3  (units)',
   ].map(tableNamed);
   const fuelMap = tableNamed('Fuel Calibration Map');
+  const afrOpts = () => ({
+    minSamples: MIN_SAMPLES,
+    maxFuelChangePct: 5,
+    loadScale: detectLoadScale(inputs.map((i) => i.log), tableNamed('AFR Map warm')).factor,
+    injectorTable: tableNamed('Injector Scaling'),
+  });
+
+  it('routes a flat offset to injector scaling, with the corrected value', () => {
+    const a = analyseAfr(inputs, mafParts, fuelMap, afrOpts());
+    const global = a.causes.find((c) => c.id === 'global');
+    expect(global?.table).toBe('Injector Scaling');
+    // Lean everywhere means more fuel, which is a smaller injector number.
+    const [, from, to] = global!.explanation.match(/(\d+) to about (\d+) cc/)!.map(Number);
+    expect(to).toBeLessThan(from);
+  });
+
+  it('never treats a lift-off as fuelling evidence', () => {
+    const a = analyseAfr(inputs, mafParts, fuelMap, afrOpts());
+    expect(a.notes.join(' ')).toMatch(/[1-9][\d,]* closed-throttle overrun samples/);
+  });
+
+  it('never leans out a cell that is measured lean', () => {
+    // The residual assumes the injector offset is already fixed. Until it is,
+    // a cell can read rich of its airflow bin while still running lean, and
+    // pulling fuel there would make a lean cell leaner.
+    const rec = recommendFuelMap(inputs, mafParts, fuelMap, afrOpts());
+    expect(rec.status).toBe('ok');
+    for (const s of rec.suggestions.values()) expect(s.delta).toBeGreaterThan(0);
+    expect(rec.notes.join(' ')).toMatch(/held/);
+  });
 
   it('separates closed loop from open loop and only trusts open loop', () => {
     const a = analyseAfr(inputs, mafParts, fuelMap);
