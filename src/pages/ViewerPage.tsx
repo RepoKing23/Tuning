@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { activeLogs, useProject } from '../state/project';
 import { readTable } from '../lib/rom/readTable';
 import { LogChart } from '../components/viewer/LogChart';
@@ -28,7 +28,15 @@ const FALLBACK_RPM = [
 export function ViewerPage() {
   const project = useProject();
   const selected = activeLogs(project);
-  const primary = selected[0] ?? null;
+
+  // The chart plots one log. Default to the newest selected one, and jump to a
+  // log as soon as it is uploaded: logs are remembered between visits, so
+  // "the first selected log" would keep showing an old one and a fresh upload
+  // would look as if it never loaded.
+  const [viewId, setViewId] = useState<string | null>(null);
+  useEffect(() => { setViewId(null); }, [project.logs]);
+  const primary =
+    selected.find((l) => l.log.id === viewId) ?? selected[selected.length - 1] ?? null;
 
   const [visible, setVisible] = useState<string[]>(DEFAULT_VISIBLE);
   const [focused, setFocused] = useState<string | null>('RPM');
@@ -113,6 +121,22 @@ export function ViewerPage() {
           </div>
         ) : (
           <>
+            {selected.length > 1 && (
+              <div className="row small" style={{ marginBottom: 10, gap: 6 }}>
+                <label className="muted" htmlFor="viewer-log">Plotting</label>
+                <select
+                  id="viewer-log"
+                  value={primary.log.id}
+                  onChange={(e) => setViewId(e.target.value)}
+                  style={{ minWidth: 0, flex: '0 1 auto', maxWidth: '100%' }}
+                >
+                  {selected.map((l) => (
+                    <option key={l.log.id} value={l.log.id}>{l.log.name}</option>
+                  ))}
+                </select>
+                <span className="muted">{selected.length} logs selected</span>
+              </div>
+            )}
             <HealthSummary log={primary.log} health={primary.health} />
             {loadScale && loadScale.factor !== 1 && (
               <div className="notice warn">
